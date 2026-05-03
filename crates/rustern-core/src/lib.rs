@@ -3,4 +3,5 @@
 
 pub mod discovery;
 pub mod pipeline;
+pub mod render;
 pub mod source;
