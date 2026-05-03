@@ -1,0 +1,36 @@
+[package]
+name = "rustern-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Core library for rustern: LogSource, Pipeline, Renderer"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+kube = { workspace = true }
+k8s-openapi = { workspace = true }
+regex = { workspace = true }
+bytes = { workspace = true }
+jaq-core = { workspace = true }
+jaq-std = { workspace = true }
+jaq-json = { workspace = true }
+owo-colors = "4"
+seahash = "4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = { workspace = true }
+tower-test = "0.4"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client"] }
+kube = { workspace = true }
