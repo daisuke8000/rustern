@@ -1,4 +1,4 @@
-//! `run` 専用: 生ストリームにパイプライン段をラップする。
+//! `run` only: apply pipeline stages to a raw `LogEvent` stream.
 
 use futures::stream::{BoxStream, Stream};
 use regex::Regex;

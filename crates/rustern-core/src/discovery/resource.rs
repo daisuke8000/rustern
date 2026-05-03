@@ -2,9 +2,9 @@ use regex::Regex;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Query {
-    /// 第一引数が regex のとき(stern 互換)
+    /// Pod name regex (stern-compatible).
     PodNameRegex(String),
-    /// `<kind>/<name>` 構文で label selector に変換できるとき
+    /// `kind/name` query mapped to a label selector.
     LabelSelector { kind: ResourceKind, name: String },
 }
 

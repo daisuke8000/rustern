@@ -1,4 +1,4 @@
-//! cancel 後にメタの Weak が無効化されること。
+//! After cancellation, the meta `Weak` must not keep the allocation alive.
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};

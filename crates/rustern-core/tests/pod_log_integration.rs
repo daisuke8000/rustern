@@ -1,4 +1,4 @@
-//! kube::Client を tower-test で差し替え、`Api::log_stream` を検証。
+//! Swap in `kube::Client` via tower-test and exercise `Api::log_stream`.
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};

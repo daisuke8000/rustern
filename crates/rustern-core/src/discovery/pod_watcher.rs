@@ -7,7 +7,7 @@ use kube::runtime::watcher::{Config, Event, watcher};
 
 use crate::source::SourceKey;
 
-/// 純粋な reconcile: 既知集合 vs スナップショット。
+/// Pure reconcile: known keys vs current snapshot.
 pub fn reconcile(active: &HashSet<SourceKey>, snapshot: &HashSet<SourceKey>) -> ReconcileDiff {
     let to_drop: Vec<SourceKey> = active.difference(snapshot).cloned().collect();
     let to_add: Vec<SourceKey> = snapshot.difference(active).cloned().collect();

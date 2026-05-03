@@ -1,11 +1,11 @@
-//! Runtime: backpressure、mux、パイプライン、レンダラ接続。
+//! Runtime: backpressure, mux, pipeline wiring, renderer hookup.
 //!
-//! | モジュール | 内容 |
-//! |------------|------|
-//! | [`config`] | `CoreRunConfig`、formatter 指定、エラー・結果型 |
-//! | [`forward`] | `LossyMetrics`、`forward_to_render`、ログ接続セマフォ |
-//! | [`pipeline`] | `run` 専用のストリームにパイプライン段を載せる（`apply_pipeline`） |
-//! | [`orchestrate`] | `run` — watch、mpsc、各 `tokio::spawn` の配線 |
+//! | Module | Role |
+//! |--------|------|
+//! | [`config`] | `CoreRunConfig`, formatter choice, errors/results |
+//! | [`forward`] | `LossyMetrics`, `forward_to_render`, log concurrency semaphore |
+//! | [`pipeline`] | Pipeline stages on the `run` stream (`apply_pipeline`) |
+//! | [`orchestrate`] | `run` — watch, channels, `tokio::spawn` wiring |
 
 mod config;
 mod forward;
