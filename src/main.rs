@@ -1,6 +1,8 @@
 use clap::Parser;
+use tokio_util::sync::CancellationToken;
 
 mod cli;
+mod run_config;
 
 fn main() {
     let cli = cli::Cli::parse();
@@ -8,8 +10,7 @@ fn main() {
         eprintln!("error: {msg}");
         std::process::exit(1);
     }
-    let _ = cli.follow();
-    let _ = cli.context_selector();
+    let _cfg = cli.core_run_config(CancellationToken::new());
 
     // TODO: rustern_core::run
     eprintln!("rstn: not implemented");
