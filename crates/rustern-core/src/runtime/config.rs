@@ -1,4 +1,4 @@
-//! `CoreRunConfig` と実行結果・エラー型。
+//! `CoreRunConfig`, run outcome, and error types.
 
 use tokio_util::sync::CancellationToken;
 

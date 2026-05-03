@@ -1,4 +1,4 @@
-//! レンダラへの転送、`LossyMetrics`、同時ログ接続数セマフォ。
+//! Forward to renderer, `LossyMetrics`, concurrent log stream semaphore.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

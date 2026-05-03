@@ -1,4 +1,4 @@
-//! watch → mux → パイプライン → stdout の起動と終了。
+//! Watch → mux → pipeline → stdout lifecycle.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -67,7 +67,7 @@ fn source_meta_for_key(context_name: &ContextName, key: &SourceKey) -> SourceMet
     }
 }
 
-/// StreamMap で複数 `LogSource` を 1 本にし、パイプライン前 mpsc へ送る。
+/// Merge sources with `StreamMap` and forward into the pre-pipeline channel.
 async fn mux_multiplex_loop(
     mut mux_rx: mpsc::Receiver<MuxCmd>,
     raw_event_tx: mpsc::Sender<Result<LogEvent, LogSourceError>>,
@@ -283,7 +283,7 @@ fn spawn_pipeline_forward_task(
     ))
 }
 
-/// メイン run: watcher → StreamMap → パイプライン → stdout。
+/// Main entry: watcher → `StreamMap` → pipeline → stdout.
 pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let client = build_client(&cfg.context).await?;
     let q = parse_query(&cfg.query)?;

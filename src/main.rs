@@ -1,8 +1,17 @@
-//! `rstn` エントリ。Phase 7（CLI / Profile / config 配線）で `rustern_core::run` へ接続予定。
+use clap::Parser;
+
+mod cli;
 
 fn main() {
-    println!(
-        "rstn v{} — CLI wiring is not implemented yet; see rustern-core tests and runtime::run",
-        env!("CARGO_PKG_VERSION")
-    );
+    let cli = cli::Cli::parse();
+    if let Err(msg) = cli.validate() {
+        eprintln!("error: {msg}");
+        std::process::exit(1);
+    }
+    let _ = cli.follow();
+    let _ = cli.context_selector();
+
+    // TODO: rustern_core::run
+    eprintln!("rstn: not implemented");
+    std::process::exit(2);
 }

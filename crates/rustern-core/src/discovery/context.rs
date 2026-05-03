@@ -22,8 +22,9 @@ pub enum ContextError {
     Client(String),
 }
 
-/// CLI / 環境変数から kubeconfig を解決。
-/// 優先順位: 引数 > KUBECONFIG(先頭パスのみ) > ~/.kube/config
+/// Resolve kubeconfig path from explicit selector, env, or default location.
+///
+/// Precedence: `kubeconfig_path` > first entry in `KUBECONFIG` > `~/.kube/config`.
 pub fn resolve_kubeconfig(selector: &ContextSelector) -> Result<Kubeconfig, ContextError> {
     let path = if let Some(p) = &selector.kubeconfig_path {
         p.clone()

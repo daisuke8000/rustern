@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# reviews.auto_review.base_branches (公式):
+# - 空 [] のとき、マージ先が GitHub の「デフォルトブランチ」の PR が自動レビュー対象。
+# - 追加のパターンは「デフォルト以外でもレビューしたいマージ先」だけ列挙する（例: develop）。
+#   https://docs.coderabbit.ai/configuration/auto-review#base_branches
+
+language: ja-JP
+
+reviews:
+  profile: chill
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 5
+    base_branches: []
+    ignore_title_keywords:
+      - "WIP"
+      - "[skip review]"
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "renovate[bot]"
+    # デフォルト以外に統合ブランチがある場合のみ追加する（例）:
+    # base_branches:
+    #   - "develop"
+    #   - "release/.*"

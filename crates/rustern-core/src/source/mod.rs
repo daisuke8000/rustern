@@ -1,4 +1,4 @@
-//! v0.1: PodLogSource のみ実体化。Event は v0.2、File は v0.2+。
+//! Only `PodLogSource` is implemented; `Event` / `File` are reserved.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ pub struct SourceMeta {
     pub kind: SourceKind,
     pub node: Option<String>,
     pub labels: Arc<Labels>,
-    /// Pod の metadata.uid。rolling update で同名 pod が再作成された時の衝突回避用。
+    /// Pod `metadata.uid` (disambiguates reused names across rollouts).
     pub uid: String,
 }
 
@@ -52,7 +52,7 @@ pub struct SourceKey {
     pub namespace: String,
     pub pod: String,
     pub container: String,
-    /// Pod の metadata.uid。
+    /// Pod `metadata.uid`.
     pub uid: String,
 }
 
@@ -78,7 +78,7 @@ pub enum LogSourceError {
 
 pub type BoxedLogStream = Pin<Box<dyn Stream<Item = Result<LogEvent, LogSourceError>> + Send>>;
 
-/// 「メタ情報を保持するファクトリ」。`into_stream` で `StreamMap` に insert 可能。
+/// Source that owns metadata and exposes a log line stream (for `StreamMap`).
 pub trait LogSource: Send {
     fn meta(&self) -> &SourceMeta;
     fn cancellation_token(&self) -> CancellationToken;

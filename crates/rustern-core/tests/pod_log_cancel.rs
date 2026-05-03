@@ -1,4 +1,4 @@
-//! CancellationToken 階層の最低限の検証。
+//! Minimal test for `CancellationToken` parent/child cancellation.
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};

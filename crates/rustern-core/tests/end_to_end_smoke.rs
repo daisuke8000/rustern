@@ -1,4 +1,4 @@
-//! tower-test のログ応答 → `PodLogSource` → パイプライン → `DefaultLineFormatter` / `render_task` まで一連で検証。
+//! End-to-end: tower-test log bytes → `PodLogSource` → pipeline → `DefaultLineFormatter` / `render_task`.
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};

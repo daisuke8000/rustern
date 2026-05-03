@@ -1,4 +1,4 @@
-//! Writer 単一タスク + flush ticker（50ms）。
+//! Single writer task + flush ticker (50ms).
 
 use std::io;
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-//! log_stream 3 回目で成功するモック。
+//! Mock: `log_stream` succeeds on the third attempt.
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};

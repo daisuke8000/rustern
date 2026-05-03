@@ -1,24 +1,24 @@
 # rustern-core
 
-Kubernetes 上の複数 Pod・コンテナのログを集約する CLI **rustern** の中核ライブラリです。クラスタ接続、Pod のウォッチ、ログストリームのオープン、行単位の変換（パイプライン）、標準出力への描画までをライブラリ API としてまとめています。
+Core library for the **rustern** CLI: it aggregates logs from many pods and containers on Kubernetes. The API covers cluster connection, pod watch, opening log streams, per-line transforms (pipeline), and writing to stdout.
 
-ワークスペース全体の利用者向けの説明はリポジトリルートの `README.md` を参照してください。このファイルは **`rustern-core` クレート専用の開発者向けドキュメント**です。図は Mermaid です。GitHub や対応プレビューで表示されます。
+Workspace-wide user-facing docs live in the repository root [`README.md`](../../README.md). This file is **developer documentation for the `rustern-core` crate only**. Diagrams use Mermaid (render on GitHub or any Mermaid-capable preview).
 
-## 目次
+## Contents
 
-1. [前提とコマンド](#前提とコマンド)
-2. [ソースツリーとモジュール対応](#ソースツリーとモジュール対応)
-3. [アーキテクチャ（層と依存）](#アーキテクチャ層と依存)
-4. [パイプラインの処理順](#パイプラインの処理順)
-5. [`run` のデータフローと並行処理](#run-のデータフローと並行処理)
-6. [公開 API](#公開-api)
-7. [テスト](#テスト)
-8. [v0.1 のスコープと注意](#v01-のスコープと注意)
+1. [Prerequisites and commands](#prerequisites-and-commands)
+2. [Source tree vs modules](#source-tree-vs-modules)
+3. [Architecture (layers and dependencies)](#architecture-layers-and-dependencies)
+4. [Pipeline order](#pipeline-order)
+5. [`run` data flow and concurrency](#run-data-flow-and-concurrency)
+6. [Public API](#public-api)
+7. [Tests](#tests)
+8. [v0.1 scope and notes](#v01-scope-and-notes)
 
-## 前提とコマンド
+## Prerequisites and commands
 
-- Rust のバージョンはワークスペースの `rust-version` に従うこと。
-- 統合テストの一部はモック API のみ、一部は Kubernetes API の挙動に依存します。
+- Use the workspace [`rust-version`](../../Cargo.toml) for the Rust toolchain.
+- Some integration tests use a mock API only; others depend on Kubernetes API behavior.
 
 ```bash
 cargo test -p rustern-core
@@ -26,42 +26,42 @@ cargo clippy -p rustern-core --all-targets -- -D warnings
 cargo doc -p rustern-core --open
 ```
 
-## ソースツリーとモジュール対応
+## Source tree vs modules
 
-`src/` 配下のファイルと役割の対応（索引用）。
+Index of `src/` paths and roles.
 
-| パス | 役割 |
+| Path | Role |
 |------|------|
-| `lib.rs` | 公開モジュールと `pub use` |
-| `runtime/mod.rs` | モジュール構成と `pub use`（下表） |
-| `runtime/orchestrate.rs` | **`run`**（watch / spawn 配線） |
-| `runtime/forward.rs` | **`forward_to_render`**、`LossyMetrics`、ログ用セマフォ |
-| `runtime/pipeline.rs` | **`apply_pipeline`**（`run` 専用のストリームラップ） |
-| `runtime/config.rs` | **`CoreRunConfig`**、`RunError`、`RuntimeFwdConfig` など |
-| `source/mod.rs` | `LogEvent`、`SourceKey`、`LogSource` などドメインモデル |
-| `source/pod_log.rs` | `PodLogSource`（ログ API → 行ストリーム） |
-| `discovery/context.rs` | kubeconfig と `kube::Client` |
-| `discovery/resource.rs` | クエリ文字列のパース |
-| `discovery/pod_watcher.rs` | Pod → `SourceKey`、`reconcile` |
-| `pipeline/*.rs` | 行ストリーム変換（順序は `runtime` が固定） |
-| `render/mod.rs` | `RenderCommand`、`render_task`、`flush_ticker` |
-| `render/default_renderer.rs` ほか | `LineFormatter` 実装 |
+| `lib.rs` | Public modules and `pub use` |
+| `runtime/mod.rs` | Module layout and `pub use` (see below) |
+| `runtime/orchestrate.rs` | **`run`** (watch / spawn wiring) |
+| `runtime/forward.rs` | **`forward_to_render`**, `LossyMetrics`, log semaphore |
+| `runtime/pipeline.rs` | **`apply_pipeline`** (stream wrapper used only by `run`) |
+| `runtime/config.rs` | **`CoreRunConfig`**, `RunError`, `RuntimeFwdConfig`, etc. |
+| `source/mod.rs` | Domain types: `LogEvent`, `SourceKey`, `LogSource`, … |
+| `source/pod_log.rs` | `PodLogSource` (log API → line stream) |
+| `discovery/context.rs` | kubeconfig and `kube::Client` |
+| `discovery/resource.rs` | Query string parsing |
+| `discovery/pod_watcher.rs` | Pod → `SourceKey`, `reconcile` |
+| `pipeline/*.rs` | Line-stream transforms (order fixed by `runtime`) |
+| `render/mod.rs` | `RenderCommand`, `render_task`, `flush_ticker` |
+| `render/default_renderer.rs`, … | `LineFormatter` implementations |
 
-## アーキテクチャ（層と依存）
+## Architecture (layers and dependencies)
 
-### 考え方
+### Principles
 
-- 下位の層ほど Kubernetes / 入出力から独立。`pipeline` と `render` は `LogEvent` ストリームのみを扱い、Pod API を直接呼ばない。
-- `pipeline` 内のファイル同士は橋渡ししない。処理順は `runtime::apply_pipeline` に集約。
-- Kubernetes 固有の処理は `discovery/*` と `source/pod_log.rs` に寄せ、境界で分離。
+- Lower layers avoid Kubernetes / I/O details where possible. `pipeline` and `render` only see `LogEvent` streams and never call the Pod API directly.
+- Pipeline stages do not call each other across files; order lives in `runtime::apply_pipeline`.
+- Kubernetes-specific logic stays in `discovery/*` and `source/pod_log.rs`.
 
-### 図：層と依存関係
+### Diagram: layers and dependencies
 
 ```mermaid
 flowchart TD
-    subgraph Legend [凡例]
+    subgraph Legend [Legend]
         direction LR
-        NodeA[モジュール A] -->|use で参照| NodeB[モジュール B]
+        NodeA[module A] -->|referenced via use| NodeB[module B]
     end
 
     subgraph L4 [L4: Orchestration]
@@ -102,30 +102,30 @@ flowchart TD
     style Legend fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
 ```
 
-`runtime::orchestrate` の `run` は `discovery/context` と `discovery/resource` を直接参照します。`pod_watcher` と `pod_log` は `source/mod`（`SourceKey` 等）のみを参照し、`context` / `resource` モジュールには依存しません。
+`runtime::orchestrate::run` references `discovery/context` and `discovery/resource` directly. `pod_watcher` and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
 
-### 層ごとの説明
+### Layers explained
 
-| 層 | 内容 |
-|----|------|
-| **L0** | 型定義、kubeconfig、クエリパース。他 `rustern-core` モジュールに依存しない。 |
-| **L1** | `pod_watcher` は Pod → `SourceKey` 等。`pod_log` はログ API → `LogSource`。いずれも L0 のモデルに依存。 |
-| **L2** | `Result<LogEvent, LogSourceError>` のストリームを段階的に変換。 |
-| **L3** | 単一 writer への集約、フォーマット、flush。 |
-| **L4** | チャネル、`StreamMap`、`tokio::spawn` で L1〜L3 を実行時に接続。 |
+| Layer | Contents |
+|-------|----------|
+| **L0** | Types, kubeconfig, query parsing. Does not depend on other `rustern-core` modules. |
+| **L1** | `pod_watcher`: Pod → `SourceKey`. `pod_log`: log API → `LogSource`. Both build on L0 models. |
+| **L2** | Incremental transforms on `Result<LogEvent, LogSourceError>` streams. |
+| **L3** | Single writer, formatting, flush. |
+| **L4** | Channels, `StreamMap`, `tokio::spawn` wiring L1–L3 at runtime. |
 
-## パイプラインの処理順
+## Pipeline order
 
-`runtime::apply_pipeline` における順序です。`FilterOn` で include / exclude の位置だけが変わり、最後は常に `color_assign` です。
+Order inside `runtime::apply_pipeline`. Only include/exclude placement changes with `FilterOn`; the last stage is always `color_assign`.
 
-### `FilterOn` による分岐（表）
+### `FilterOn` branches
 
-| モード | include / exclude | 処理ステップ（上から順） |
-|--------|-------------------|-------------------------|
-| **`FilterOn::Original`** | 変換前のメッセージで絞り込み | `include_exclude` → `container_filter` → `json_annotate` → `level_classify` → `jq_evaluate`（任意）→ `color_assign` |
-| **`FilterOn::Transformed`** | 変換後のメッセージで絞り込み | `container_filter` → `json_annotate` → `level_classify` → `jq_evaluate`（任意）→ `include_exclude` → `color_assign` |
+| Mode | include / exclude | Stages (top to bottom) |
+|------|-------------------|-------------------------|
+| **`FilterOn::Original`** | Raw message | `include_exclude` → `container_filter` → `json_annotate` → `level_classify` → `jq_evaluate` (optional) → `color_assign` |
+| **`FilterOn::Transformed`** | After transforms | `container_filter` → `json_annotate` → `level_classify` → `jq_evaluate` (optional) → `include_exclude` → `color_assign` |
 
-### 図：上記 2 経路の比較
+### Diagram: both paths
 
 ```mermaid
 flowchart LR
@@ -134,7 +134,7 @@ flowchart LR
         O1[include_exclude] --> O2[container_filter]
         O2 --> O3[json_annotate]
         O3 --> O4[level_classify]
-        O4 --> O5["jq_evaluate<br/>(クエリ無しは素通し)"]
+        O4 --> O5["jq_evaluate<br/>(pass-through if no query)"]
         O5 --> O6[color_assign]
     end
 
@@ -142,56 +142,56 @@ flowchart LR
         direction LR
         T1[container_filter] --> T2[json_annotate]
         T2 --> T3[level_classify]
-        T3 --> T4["jq_evaluate<br/>(クエリ無しは素通し)"]
+        T3 --> T4["jq_evaluate<br/>(pass-through if no query)"]
         T4 --> T5[include_exclude]
         T5 --> T6[color_assign]
     end
 ```
 
-`json_query` が無い場合、`jq_evaluate` の有無は実装上のラップの差であり、段の意味は表どおりです。
+Without `json_query`, `jq_evaluate` is effectively optional plumbing; stage semantics match the table.
 
-## `run` のデータフローと並行処理
+## `run` data flow and concurrency
 
-### 処理の流れ（段階別）
+### Steps
 
-1. **準備** — `build_client`、`parse_query`、`ListParams` / `WatchConfig`（`context` / `resource`）。
-2. **ウォッチ** — Pod の `Apply` / `Delete` / `Init*`（kube `watcher`）。
-3. **キーとソース** — `SourceKey` ごとに `PodLogSource::start` でログストリームを開く。
-4. **マージ** — `StreamMap<SourceKey, _>` で複数ストリームを統合（mux タスク）。
-5. **生チャネル** — パイプライン前の `LogEvent` を mpsc で渡す（バックプレッシャ）。
-6. **パイプライン** — `ReceiverStream` → `apply_pipeline`（前節の順）。
-7. **レンダラ** — `forward_to_render` が `RenderCommand::Line` を送る。`lossy` 時は `try_send` 失敗でドロップとメトリクス。
-8. **出力** — `render_task` が `LineFormatter` で書き、`flush_ticker` が間欠 flush。
+1. **Setup** — `build_client`, `parse_query`, `ListParams` / `WatchConfig` (`context` / `resource`).
+2. **Watch** — Pod `Apply` / `Delete` / `Init*` via kube `watcher`.
+3. **Keys and sources** — For each `SourceKey`, open logs with `PodLogSource::start`.
+4. **Merge** — Combine streams with `StreamMap<SourceKey, _>` (mux task).
+5. **Raw channel** — Send pre-pipeline `LogEvent` through mpsc (backpressure).
+6. **Pipeline** — `ReceiverStream` → `apply_pipeline` (order above).
+7. **Renderer** — `forward_to_render` sends `RenderCommand::Line`; if `lossy`, failed `try_send` drops lines and updates metrics.
+8. **Output** — `render_task` writes via `LineFormatter`; `flush_ticker` triggers periodic flush.
 
-**終了** — `root_token` をキャンセル → レンダラへ `Shutdown` → 関連タスクを片付けて `run` が return。
+**Shutdown** — Cancel `root_token` → `Shutdown` to renderer → tear down tasks → `run` returns.
 
-### 図：データの通路
+### Diagram: data path
 
 ```mermaid
 flowchart LR
-    Prep[準備<br/>Client / Query / Watch] --> LogOpen["Watch:<br/>PodLogSource::start"]
+    Prep[Setup<br/>Client / Query / Watch] --> LogOpen["Watch:<br/>PodLogSource::start"]
     LogOpen -->|MuxCmd::Add + stream| SMap[Mux: StreamMap]
-    SMap -->|LogEvent| RawMpsc[生 mpsc]
+    SMap -->|LogEvent| RawMpsc[raw mpsc]
     RawMpsc -->|ReceiverStream| Apply[apply_pipeline]
     Apply --> Fwd[forward_to_render]
     Fwd -->|RenderCommand| RTask[render_task]
     RTask --> Stdout((stdout))
 ```
 
-ログ API を開くのは **`PodLogSource::start`**（watch タスク側が spawn）。mux は受け取ったストリームを `StreamMap` に載せ、統合結果を生 mpsc へ送る。`MuxCmd::Remove` は省略。
+Opening the log API happens in **`PodLogSource::start`** (spawned from the watch task). The mux task inserts streams into `StreamMap` and forwards merged output to the raw mpsc. `MuxCmd::Remove` is omitted here.
 
-### 図：並行タスク
+### Diagram: concurrent tasks
 
 ```mermaid
 flowchart TD
-    Watch[["Watch タスク"]]
-    Mux[["Mux タスク"]]
-    Main[["パイプライン + forward"]]
+    Watch[["watch task"]]
+    Mux[["mux task"]]
+    Main[["pipeline + forward"]]
     Render[["render_task"]]
     Ticker(("flush_ticker"))
 
     Watch -->|MuxCmd| Mux
-    Mux -->|生 LogEvent| Main
+    Mux -->|raw LogEvent| Main
     Main -->|RenderCommand| Render
     Ticker -.->|try_send Flush| Render
 
@@ -201,9 +201,9 @@ flowchart TD
     class Ticker timer;
 ```
 
-`run` 内の `tokio::spawn` したタスクの役割分担を示しています。
+Shows how `tokio::spawn` tasks split work inside `run`.
 
-### 図：シーケンス（代表経路）
+### Diagram: sequence (typical path)
 
 ```mermaid
 sequenceDiagram
@@ -212,42 +212,42 @@ sequenceDiagram
     participant P as Pipeline + forward
     participant R as render_task
 
-    Note over W, M: Pod 追加
-    Note over W: PodLogSource::start（ログ API）
+    Note over W, M: Pod added
+    Note over W: PodLogSource::start (log API)
     W->>M: MuxCmd::Add (SourceKey, stream)
     M->>M: StreamMap insert
 
-    Note over M, R: 行の到着
-    M->>P: LogEvent（生 mpsc）
+    Note over M, R: Lines arrive
+    M->>P: LogEvent (raw mpsc)
     P->>P: apply_pipeline
     P->>R: RenderCommand::Line
-    R->>R: 整形と stdout
+    R->>R: format + stdout
 
-    Note over W, M: Pod 削除
-    W->>W: 子 CancellationToken cancel
+    Note over W, M: Pod removed
+    W->>W: child CancellationToken cancel
     W->>M: MuxCmd::Remove (SourceKey)
     M->>M: StreamMap remove
 ```
 
-`MuxCmd::Add` の第 2 引数は **`BoxedLogStream`**（ログ行ストリーム）。mux は API を呼ばず、ストリームのマージのみ担当します。
+The second argument of `MuxCmd::Add` is **`BoxedLogStream`** (log line stream). The mux task never calls the API; it only merges streams.
 
-## 公開 API
+## Public API
 
-- `run(CoreRunConfig) -> Result<RunOutcome, RunError>` … 一体型のエントリ。
-- `validate_filter`、`CompiledFilter` … 式の事前検証。
-- `forward_to_render`、`build_log_request_semaphore`、`LossyMetrics` … 配線の再利用やテスト。
+- `run(CoreRunConfig) -> Result<RunOutcome, RunError>` — single entry point.
+- `validate_filter`, `CompiledFilter` — validate expressions up front.
+- `forward_to_render`, `build_log_request_semaphore`, `LossyMetrics` — wiring helpers and tests.
 
-再エクスポートの一覧は `src/lib.rs` を参照してください。
+See `src/lib.rs` for the full re-export list.
 
-## テスト
+## Tests
 
-| 種類 | 場所 |
-|------|------|
-| 単体 | `src/**/*.rs` の `#[cfg(test)]` |
-| 統合 | `tests/`（モック API、リトライ、キャンセル、E2E スモークなど） |
+| Kind | Location |
+|------|----------|
+| Unit | `#[cfg(test)]` in `src/**/*.rs` |
+| Integration | `tests/` (mock API, retries, cancellation, E2E smoke, …) |
 
-## v0.1 のスコープと注意
+## v0.1 scope and notes
 
-- ログソースは Pod ログが中心。`SourceKind` のその他の種別は未実装。
-- CLI バイナリ（ルート `rustern` クレート）は別。`CoreRunConfig` の組み立てはワークスペース側。
-- kube / k8s-openapi のバージョン追随では、`source/pod_log.rs` の `build_log_params` やログストリーム型が手掛かりになりやすい。
+- Log sources focus on pod logs; other `SourceKind` variants are not implemented.
+- The CLI binary lives in the workspace root `rustern` crate; assembling `CoreRunConfig` is done there.
+- When upgrading `kube` / `k8s-openapi`, start from `build_log_params` in `source/pod_log.rs` and the log stream types.

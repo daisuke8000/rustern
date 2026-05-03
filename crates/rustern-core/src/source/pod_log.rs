@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{BoxedLogStream, LogEvent, LogSource, LogSourceError, SourceMeta};
 
-/// Kubernetes log API に渡すパラメータ構築。kube 更新時はここだけ差し替え。
+/// Build `kube::api::LogParams` for the Kubernetes log API.
 pub fn build_log_params(
     meta: &SourceMeta,
     follow: bool,
@@ -57,7 +57,7 @@ impl PodLogSource {
         }
     }
 
-    /// テスト: 内部メタの弱参照（`pod_token.cancel` 後に drop されるか確認用）。
+    /// Weak pointer to meta (tests assert drop after `pod_token.cancel()`).
     pub fn meta_weak(this: &Self) -> std::sync::Weak<SourceMeta> {
         Arc::downgrade(&this.meta)
     }
