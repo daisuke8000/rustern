@@ -26,11 +26,16 @@ pub struct Cli {
     pub context: Option<String>,
 
     /// Namespace
-    #[arg(short = 'n', long, value_name = "NS")]
+    #[arg(
+        short = 'n',
+        long,
+        value_name = "NS",
+        conflicts_with = "all_namespaces"
+    )]
     pub namespace: Option<String>,
 
     /// All namespaces
-    #[arg(short = 'A', long = "all-namespaces")]
+    #[arg(short = 'A', long = "all-namespaces", conflicts_with = "namespace")]
     pub all_namespaces: bool,
 
     /// Label selector
@@ -150,6 +155,22 @@ impl Cli {
     pub fn follow(&self) -> bool {
         self.follow_short || !self.no_follow
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.tail.is_some_and(|v| v < 0) {
+            return Err("--tail must be >= 0".into());
+        }
+        if self.since.is_some_and(|v| v < 0) {
+            return Err("--since must be >= 0".into());
+        }
+        if self.buffer_size == 0 {
+            return Err("--buffer-size must be > 0".into());
+        }
+        if self.max_log_requests == 0 {
+            return Err("--max-log-requests must be > 0".into());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -185,5 +206,28 @@ mod tests {
     fn follow_flag_sets_streaming() {
         let cli = Cli::try_parse_from(["rstn", "-f", "x"]).unwrap();
         assert!(cli.follow());
+    }
+
+    #[test]
+    fn namespace_and_all_namespaces_conflict() {
+        assert!(Cli::try_parse_from(["rstn", "-n", "ns", "-A", "q"]).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_negative_tail() {
+        let cli = Cli::try_parse_from(["rstn", "--tail=-1", "q"]).unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_buffer_size() {
+        let cli = Cli::try_parse_from(["rstn", "--buffer-size", "0", "q"]).unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_defaults() {
+        let cli = Cli::try_parse_from(["rstn", "x"]).unwrap();
+        cli.validate().unwrap();
     }
 }
