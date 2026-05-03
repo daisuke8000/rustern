@@ -1,0 +1,22 @@
+# Compares manifests on PR against the advisory database — complements Dependabot and `cargo audit`.
+# Public repos and orgs under GitHub Enterprise with Advanced Security: works as documented.
+name: Dependency review
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Same checkout pin as workflows/ci.yml
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # dependency-review-action v4 branch @ 4.9.0 release merge
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
