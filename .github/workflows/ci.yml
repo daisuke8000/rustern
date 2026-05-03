@@ -8,11 +8,28 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: "1.88"
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
+
+      # RustSec advisory-db scan of Cargo.lock
+      - name: Advisory scan
+        run: cargo audit
+
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # actions/checkout@v4.3.1 — tag may move; this SHA pins the audited tree.
+      # Immutable commit pin (moving @v tags are not used). Not necessarily the newest release tag; Dependabot proposes bumps.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       # dtolnay/rust-toolchain@v1 — same as above (immutable commit).
