@@ -1,0 +1,107 @@
+use regex::Regex;
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Query {
+    /// 第一引数が regex のとき(stern 互換)
+    PodNameRegex(String),
+    /// `<kind>/<name>` 構文で label selector に変換できるとき
+    LabelSelector { kind: ResourceKind, name: String },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ResourceKind {
+    Pod,
+    ReplicationController,
+    Service,
+    DaemonSet,
+    Deployment,
+    ReplicaSet,
+    StatefulSet,
+    Job,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueryParseError {
+    #[error("invalid regex: {0}")]
+    Regex(#[from] regex::Error),
+    #[error("unknown resource kind: {0}")]
+    UnknownKind(String),
+}
+
+pub fn parse_query(arg: &str) -> Result<Query, QueryParseError> {
+    if let Some((kind_s, name)) = arg.split_once('/') {
+        let kind = match kind_s {
+            "pod" | "po" => ResourceKind::Pod,
+            "replicationcontroller" | "rc" => ResourceKind::ReplicationController,
+            "service" | "svc" => ResourceKind::Service,
+            "daemonset" | "ds" => ResourceKind::DaemonSet,
+            "deployment" | "deploy" => ResourceKind::Deployment,
+            "replicaset" | "rs" => ResourceKind::ReplicaSet,
+            "statefulset" | "sts" => ResourceKind::StatefulSet,
+            "job" => ResourceKind::Job,
+            other => return Err(QueryParseError::UnknownKind(other.to_string())),
+        };
+        Ok(Query::LabelSelector {
+            kind,
+            name: name.to_string(),
+        })
+    } else {
+        Regex::new(arg)?;
+        Ok(Query::PodNameRegex(arg.to_string()))
+    }
+}
+
+pub fn label_selector_for(kind: ResourceKind, name: &str) -> String {
+    match kind {
+        ResourceKind::Pod => format!("metadata.name={name}"),
+        _ => format!("app={name}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_query() {
+        assert_eq!(
+            parse_query("auth-.*").unwrap(),
+            Query::PodNameRegex("auth-.*".into())
+        );
+    }
+
+    #[test]
+    fn deployment_short() {
+        assert_eq!(
+            parse_query("deploy/api").unwrap(),
+            Query::LabelSelector {
+                kind: ResourceKind::Deployment,
+                name: "api".into()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_kind() {
+        assert!(matches!(
+            parse_query("foo/bar").unwrap_err(),
+            QueryParseError::UnknownKind(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_regex() {
+        assert!(matches!(
+            parse_query("(unclosed").unwrap_err(),
+            QueryParseError::Regex(_)
+        ));
+    }
+
+    #[test]
+    fn deployment_to_app_label() {
+        assert_eq!(
+            label_selector_for(ResourceKind::Deployment, "api"),
+            "app=api"
+        );
+    }
+}

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/rustern-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+    "serde",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+thiserror = "2"
+tracing = "0.1"
+kube = { version = "3.1.0", default-features = false, features = [
+    "client",
+    "config",
+    "runtime",
+    "rustls-tls",
+] }
+k8s-openapi = { version = "0.27.1", features = ["v1_31"] }
+regex = "1"
+bytes = "1"
+jaq-core = "3"
+jaq-std = "3"
+jaq-json = { version = "2", features = ["serde"] }
+tempfile = "3"
+
