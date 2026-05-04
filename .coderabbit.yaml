@@ -10,6 +10,7 @@ language: ja-JP
 reviews:
   profile: chill
   poem: false
+  request_changes_workflow: true
   auto_review:
     enabled: true
     drafts: false
