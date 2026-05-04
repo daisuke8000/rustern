@@ -10,9 +10,12 @@ use crate::cli::{Cli, FilterOnArg, FormatArg, JqModeArg, parse_since};
 impl Cli {
     /// Build a [`CoreRunConfig`] from parsed CLI flags. Does not run the pipeline.
     ///
-    /// Call [`Cli::validate`] first so numeric bounds are checked.
+    /// Call [`Cli::validate`] first so flags are checked. If `validate` is skipped, `--since`
+    /// parsing may still fail here with the same error strings as validation.
     #[must_use]
-    pub fn core_run_config(&self, root_token: CancellationToken) -> CoreRunConfig {
+    pub fn core_run_config(&self, root_token: CancellationToken) -> Result<CoreRunConfig, String> {
+        let since = self.since.as_deref().map(parse_since).transpose()?;
+
         let output_and_formatter = match self.format {
             FormatArg::Default => (
                 OutputMode::Default,
@@ -25,7 +28,7 @@ impl Cli {
             FormatArg::Raw => (OutputMode::Raw, FormatterChoice::Raw),
         };
 
-        CoreRunConfig {
+        Ok(CoreRunConfig {
             context: self.context_selector(),
             query: self.query.clone(),
             namespace: self.namespace.clone(),
@@ -35,10 +38,7 @@ impl Cli {
             exclude_container: self.exclude_container.clone(),
             follow: self.follow(),
             tail: self.tail,
-            since: self
-                .since
-                .as_deref()
-                .map(|s| parse_since(s).expect("call Cli::validate before core_run_config")),
+            since,
             include: self.include.clone(),
             exclude: self.exclude.clone(),
             filter_on: match self.filter_on {
@@ -60,7 +60,7 @@ impl Cli {
                 max_log_requests: self.max_log_requests,
             },
             root_token,
-        }
+        })
     }
 }
 
@@ -77,7 +77,7 @@ mod tests {
     fn maps_minimal_cli_to_core_config() {
         let cli = Cli::try_parse_from(["rstn", "myapp.*"]).unwrap();
         cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new());
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.query, "myapp.*");
         assert!(cfg.follow);
         assert!(!cfg.all_namespaces);
@@ -113,7 +113,7 @@ mod tests {
         ])
         .unwrap();
         cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new());
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.namespace.as_deref(), Some("kube-system"));
         assert!(!cfg.follow);
         assert!(matches!(cfg.output, OutputMode::Json));
@@ -127,7 +127,7 @@ mod tests {
     fn maps_all_namespaces_and_selector() {
         let cli = Cli::try_parse_from(["rstn", "-A", "-l", "app=myapp", "pod/foo"]).unwrap();
         cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new());
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(cfg.all_namespaces);
         assert_eq!(cfg.selector.as_deref(), Some("app=myapp"));
     }
@@ -144,7 +144,7 @@ mod tests {
         ])
         .unwrap();
         cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new());
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(
             cfg.context.kubeconfig_path,
             Some(PathBuf::from("/etc/kube"))
@@ -166,7 +166,7 @@ mod tests {
         ])
         .unwrap();
         cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new());
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.filter_on, FilterOn::Transformed);
         assert_eq!(cfg.json_query_mode, QueryMode::Append);
         assert_eq!(cfg.json_query.as_deref(), Some(".msg"));
@@ -176,7 +176,13 @@ mod tests {
     fn maps_since_duration_to_seconds() {
         let cli = Cli::try_parse_from(["rstn", "--since", "5m", "q"]).unwrap();
         cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new());
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.since, Some(300));
+    }
+
+    #[test]
+    fn core_run_config_errors_on_invalid_since_without_validate() {
+        let cli = Cli::try_parse_from(["rstn", "--since", "not-a-time", "q"]).unwrap();
+        assert!(cli.core_run_config(CancellationToken::new()).is_err());
     }
 }
