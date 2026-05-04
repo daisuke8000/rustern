@@ -1,11 +1,13 @@
 //! Map [`crate::cli::Cli`] into [`rustern_core::CoreRunConfig`].
 
+use std::io::{self, IsTerminal};
+
 use tokio_util::sync::CancellationToken;
 
 use rustern_core::{CoreRunConfig, FormatterChoice, OutputMode, RuntimeFwdConfig};
 use rustern_core::{FilterOn, QueryMode};
 
-use crate::cli::{Cli, FilterOnArg, FormatArg, JqModeArg, parse_since};
+use crate::cli::{Cli, ColorArg, FilterOnArg, FormatArg, JqModeArg, parse_since};
 
 impl Cli {
     /// Build a [`CoreRunConfig`] from parsed CLI flags. Does not run the pipeline.
@@ -21,7 +23,11 @@ impl Cli {
                 OutputMode::Default,
                 FormatterChoice::Default {
                     show_timestamps: self.timestamps,
-                    color_enabled: self.color,
+                    color_enabled: match self.color {
+                        ColorArg::Never => false,
+                        ColorArg::Always => true,
+                        ColorArg::Auto => io::stdout().is_terminal(),
+                    },
                 },
             ),
             FormatArg::Json => (OutputMode::Json, FormatterChoice::Json),
@@ -88,7 +94,7 @@ mod tests {
             cfg.formatter,
             FormatterChoice::Default {
                 show_timestamps: true,
-                color_enabled: true,
+                color_enabled: false,
             }
         ));
         assert_eq!(cfg.fwd.buffer_size, 4096);
@@ -184,5 +190,33 @@ mod tests {
     fn core_run_config_errors_on_invalid_since_without_validate() {
         let cli = Cli::try_parse_from(["rstn", "--since", "not-a-time", "q"]).unwrap();
         assert!(cli.core_run_config(CancellationToken::new()).is_err());
+    }
+
+    #[test]
+    fn maps_color_always_enables_color() {
+        let cli = Cli::try_parse_from(["rstn", "--color", "always", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                color_enabled: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn maps_color_never_disables_color() {
+        let cli = Cli::try_parse_from(["rstn", "--color", "never", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                color_enabled: false,
+                ..
+            }
+        ));
     }
 }
