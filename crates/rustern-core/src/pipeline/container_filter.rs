@@ -21,10 +21,10 @@ where
                     if !include.is_match(name) {
                         return None;
                     }
-                    if let Some(ref re) = exclude
-                        && re.is_match(name)
-                    {
-                        return None;
+                    if let Some(ref re) = exclude {
+                        if re.is_match(name) {
+                            return None;
+                        }
                     }
                     Some(Ok(ev))
                 }
