@@ -122,8 +122,7 @@ mod tests {
 
     #[test]
     fn maps_all_namespaces_and_selector() {
-        let cli =
-            Cli::try_parse_from(["rstn", "-A", "--selector", "app=myapp", "pod/foo"]).unwrap();
+        let cli = Cli::try_parse_from(["rstn", "-A", "-l", "app=myapp", "pod/foo"]).unwrap();
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new());
         assert!(cfg.all_namespaces);

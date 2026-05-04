@@ -39,7 +39,7 @@ pub struct Cli {
     pub all_namespaces: bool,
 
     /// Label selector
-    #[arg(long, value_name = "SELECTOR")]
+    #[arg(short = 'l', long, value_name = "SELECTOR")]
     pub selector: Option<String>,
 
     /// Container name regex
@@ -47,7 +47,7 @@ pub struct Cli {
     pub container: String,
 
     /// Exclude containers matching this regex
-    #[arg(long, value_name = "REGEX")]
+    #[arg(short = 'E', long, value_name = "REGEX")]
     pub exclude_container: Option<String>,
 
     /// Stream logs (`kubectl logs -f`)
@@ -185,6 +185,18 @@ mod tests {
         let sel = cli.context_selector();
         assert!(sel.kubeconfig_path.is_none());
         assert!(sel.context_name.is_none());
+    }
+
+    #[test]
+    fn label_selector_accepts_short_l() {
+        let cli = Cli::try_parse_from(["rstn", "-l", "app=myapp", "q"]).unwrap();
+        assert_eq!(cli.selector.as_deref(), Some("app=myapp"));
+    }
+
+    #[test]
+    fn exclude_container_accepts_short_cap_e() {
+        let cli = Cli::try_parse_from(["rstn", "-E", "sidecar", "q"]).unwrap();
+        assert_eq!(cli.exclude_container.as_deref(), Some("sidecar"));
     }
 
     #[test]
