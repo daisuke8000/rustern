@@ -34,6 +34,7 @@ jaq-core = "3"
 jaq-std = "3"
 jaq-json = { version = "2", features = ["serde"] }
 tempfile = "3"
+miette = { version = "7.6", features = ["fancy"] }
 
 [package]
 name = "rustern"
@@ -52,3 +53,4 @@ rustern-core = { path = "crates/rustern-core" }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+miette = { workspace = true }

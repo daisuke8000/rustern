@@ -5,6 +5,7 @@ use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
 mod cli;
+mod report;
 mod run_config;
 
 const SHUTDOWN_NONE: u8 = 0;
@@ -13,10 +14,11 @@ const SHUTDOWN_SIGTERM: u8 = 2;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    report::install_hook();
+
     let cli = cli::Cli::parse();
     if let Err(msg) = cli.validate() {
-        eprintln!("error: {msg}");
-        std::process::exit(1);
+        report::fail_msg(msg);
     }
 
     let shutdown_reason = Arc::new(AtomicU8::new(SHUTDOWN_NONE));
@@ -29,10 +31,7 @@ async fn main() {
     {
         let (sigterm, sigint) = match register_unix_signals().await {
             Ok(pair) => pair,
-            Err(e) => {
-                eprintln!("error: failed to register signal handlers: {e}");
-                std::process::exit(1);
-            }
+            Err(e) => report::fail_msg(format!("failed to register signal handlers: {e}")),
         };
         tokio::spawn(async move {
             listen_unix_shutdown(sig_reason, sig_token, sigterm, sigint).await;
@@ -49,14 +48,14 @@ async fn main() {
     match rustern_core::run(cfg).await {
         Ok(outcome) => {
             if outcome.had_source_errors {
-                std::process::exit(2);
+                report::fail_with_code(
+                    miette::Report::msg("one or more log sources reported errors"),
+                    2,
+                );
             }
             exit_after_ok(shutdown_reason.load(Ordering::SeqCst));
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => report::fail_run(e),
     }
 }
 
@@ -103,9 +102,6 @@ async fn listen_windows_shutdown(reason: Arc<AtomicU8>, root: CancellationToken)
             reason.store(SHUTDOWN_SIGINT, Ordering::SeqCst);
             root.cancel();
         }
-        Err(e) => {
-            eprintln!("error: failed to register Ctrl+C handler: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => report::fail_msg(format!("failed to register Ctrl+C handler: {e}")),
     }
 }
