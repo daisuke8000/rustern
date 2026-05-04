@@ -303,6 +303,7 @@ fn spawn_pipeline_forward_task(
     ))
 }
 
+/// Merge user field selector fragments with stern-style node pinning (`spec.nodeName`).
 fn combined_field_selector(cfg: &CoreRunConfig) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(fs) = cfg.field_selector.as_ref() {

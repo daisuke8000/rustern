@@ -133,29 +133,37 @@ pub struct Cli {
     pub max_log_requests: usize,
 }
 
+/// Regex stage knob for `-i`/`-e` (plain text vs jq output).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum FilterOnArg {
+    /// Match include/exclude on the raw NDJSON/message line.
     #[default]
     Original,
+    /// Match after jaq rewriting when `--jq` is present.
     Transformed,
 }
 
+/// How `--jq` rewrites or filters JSON log payloads.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum JqModeArg {
+    /// Drop falsy jq results.
     #[default]
     Filter,
     Replace,
     Append,
 }
 
+/// Default formatter ANSI color policy.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum ColorArg {
+    /// Color when stdout is a TTY.
     #[default]
     Auto,
     Always,
     Never,
 }
 
+/// High-level output layout (mirrors [`rustern_core::OutputMode`]).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum FormatArg {
     #[default]
@@ -165,6 +173,7 @@ pub enum FormatArg {
 }
 
 impl Cli {
+    /// Build [`ContextSelector`] from global kube config flags.
     #[must_use]
     pub fn context_selector(&self) -> ContextSelector {
         ContextSelector {
@@ -173,11 +182,13 @@ impl Cli {
         }
     }
 
+    /// Resolve follow vs one-shot mode from `-f` / `--no-follow`.
     #[must_use]
     pub fn follow(&self) -> bool {
         self.follow_short || !self.no_follow
     }
 
+    /// Cheap validation for numeric and regex flags before hitting the cluster.
     pub fn validate(&self) -> Result<(), String> {
         if self.tail.is_some_and(|v| v < 0) {
             return Err("--tail must be >= 0".into());

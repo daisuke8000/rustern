@@ -9,6 +9,7 @@ use rustern_core::{FilterOn, QueryMode};
 
 use crate::cli::{Cli, ColorArg, FilterOnArg, FormatArg, JqModeArg, parse_since};
 
+/// Deduped namespaces from repeatable `--namespace`/comma inputs; defaults to `[default]` when omitted.
 fn normalized_namespaces(cli: &Cli) -> Vec<String> {
     let mut out = Vec::new();
     for part in &cli.namespaces {

@@ -30,6 +30,7 @@ pub fn build_log_params(
     }
 }
 
+/// Live pod log [`LogSource`] that streams newline-delimited events from kube.
 pub struct PodLogSource {
     meta: Arc<SourceMeta>,
     token: CancellationToken,
@@ -62,6 +63,7 @@ impl PodLogSource {
         Arc::downgrade(&this.meta)
     }
 
+    /// Start tailing stdout/stderr logs for [`SourceMeta`] (connects kube log subresource).
     pub async fn start(
         client: Client,
         meta: SourceMeta,
