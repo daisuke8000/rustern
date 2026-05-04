@@ -66,9 +66,9 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub tail: Option<i64>,
 
-    /// Only logs newer than this many seconds
-    #[arg(long, value_name = "SECONDS")]
-    pub since: Option<i64>,
+    /// Only logs newer than this duration (`5m`, `2h`, `90s`) or a non-negative integer (seconds)
+    #[arg(long, value_name = "DURATION|SECONDS")]
+    pub since: Option<String>,
 
     /// Include lines matching regex (repeatable)
     #[arg(short = 'i', long = "include", action = clap::ArgAction::Append)]
@@ -160,8 +160,8 @@ impl Cli {
         if self.tail.is_some_and(|v| v < 0) {
             return Err("--tail must be >= 0".into());
         }
-        if self.since.is_some_and(|v| v < 0) {
-            return Err("--since must be >= 0".into());
+        if let Some(s) = &self.since {
+            parse_since(s)?;
         }
         if self.buffer_size == 0 {
             return Err("--buffer-size must be > 0".into());
@@ -171,6 +171,25 @@ impl Cli {
         }
         Ok(())
     }
+}
+
+/// Parse `--since` as a humantime duration or a non‑negative integer (seconds).
+pub(crate) fn parse_since(s: &str) -> Result<i64, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty --since".into());
+    }
+    if let Ok(d) = humantime::parse_duration(s) {
+        let secs = d.as_secs();
+        return i64::try_from(secs).map_err(|_| "--since duration too large".to_string());
+    }
+    let n: i64 = s
+        .parse()
+        .map_err(|_| format!("invalid --since (expected duration or seconds): {s}"))?;
+    if n < 0 {
+        return Err("--since must be >= 0".into());
+    }
+    Ok(n)
 }
 
 #[cfg(test)]
@@ -234,6 +253,21 @@ mod tests {
     #[test]
     fn validate_rejects_zero_buffer_size() {
         let cli = Cli::try_parse_from(["rstn", "--buffer-size", "0", "q"]).unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn parse_since_accepts_duration_and_integer_seconds() {
+        assert_eq!(parse_since("5m").unwrap(), 300);
+        assert_eq!(parse_since("90").unwrap(), 90);
+        assert_eq!(parse_since("0").unwrap(), 0);
+        assert!(parse_since("not-a-time").is_err());
+        assert!(parse_since("-1").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_since() {
+        let cli = Cli::try_parse_from(["rstn", "--since", "bogus", "q"]).unwrap();
         assert!(cli.validate().is_err());
     }
 

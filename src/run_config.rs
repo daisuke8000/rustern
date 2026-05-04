@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use rustern_core::{CoreRunConfig, FormatterChoice, OutputMode, RuntimeFwdConfig};
 use rustern_core::{FilterOn, QueryMode};
 
-use crate::cli::{Cli, FilterOnArg, FormatArg, JqModeArg};
+use crate::cli::{Cli, FilterOnArg, FormatArg, JqModeArg, parse_since};
 
 impl Cli {
     /// Build a [`CoreRunConfig`] from parsed CLI flags. Does not run the pipeline.
@@ -35,7 +35,12 @@ impl Cli {
             exclude_container: self.exclude_container.clone(),
             follow: self.follow(),
             tail: self.tail,
-            since: self.since,
+            since: self
+                .since
+                .as_deref()
+                .map(|s| {
+                    parse_since(s).expect("call Cli::validate before core_run_config")
+                }),
             include: self.include.clone(),
             exclude: self.exclude.clone(),
             filter_on: match self.filter_on {
@@ -167,5 +172,13 @@ mod tests {
         assert_eq!(cfg.filter_on, FilterOn::Transformed);
         assert_eq!(cfg.json_query_mode, QueryMode::Append);
         assert_eq!(cfg.json_query.as_deref(), Some(".msg"));
+    }
+
+    #[test]
+    fn maps_since_duration_to_seconds() {
+        let cli = Cli::try_parse_from(["rstn", "--since", "5m", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new());
+        assert_eq!(cfg.since, Some(300));
     }
 }

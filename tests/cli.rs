@@ -53,3 +53,14 @@ fn namespace_and_all_namespaces_conflict() {
         .code(2)
         .stderr(predicate::str::contains("cannot be used with"));
 }
+
+#[test]
+fn validate_rejects_invalid_since() {
+    Command::cargo_bin("rstn")
+        .unwrap()
+        .args(["--since", "not-a-duration", "x"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("invalid --since"));
+}
