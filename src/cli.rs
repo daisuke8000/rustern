@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use clap::ValueEnum;
-use regex::Regex;
 use rustern_core::ContextSelector;
 
 /// Tail logs from multiple Kubernetes pods and containers (stern-inspired).
@@ -26,35 +25,22 @@ pub struct Cli {
     #[arg(long, global = true, env = "KUBE_CONTEXT", value_name = "NAME")]
     pub context: Option<String>,
 
-    /// Namespace (repeat; comma-separated in one value is allowed)
+    /// Namespace
     #[arg(
         short = 'n',
-        long = "namespace",
+        long,
         value_name = "NS",
-        conflicts_with = "all_namespaces",
-        action = clap::ArgAction::Append
+        conflicts_with = "all_namespaces"
     )]
-    pub namespaces: Vec<String>,
+    pub namespace: Option<String>,
 
     /// All namespaces
-    #[arg(short = 'A', long = "all-namespaces", conflicts_with = "namespaces")]
+    #[arg(short = 'A', long = "all-namespaces", conflicts_with = "namespace")]
     pub all_namespaces: bool,
 
     /// Label selector
     #[arg(short = 'l', long, value_name = "SELECTOR")]
     pub selector: Option<String>,
-
-    /// Field selector for pods (server-side)
-    #[arg(long, value_name = "SELECTOR")]
-    pub field_selector: Option<String>,
-
-    /// Node name (adds spec.nodeName to field selector)
-    #[arg(long, value_name = "NAME")]
-    pub node: Option<String>,
-
-    /// Exclude pods whose name matches this regex (repeatable)
-    #[arg(long = "exclude-pod", value_name = "REGEX", action = clap::ArgAction::Append)]
-    pub exclude_pod: Vec<String>,
 
     /// Container name regex
     #[arg(short = 'c', long, default_value = ".*", value_name = "REGEX")]
@@ -191,9 +177,6 @@ impl Cli {
         if self.max_log_requests == 0 {
             return Err("--max-log-requests must be > 0".into());
         }
-        for p in &self.exclude_pod {
-            Regex::new(p).map_err(|e| format!("invalid --exclude-pod regex: {e}"))?;
-        }
         Ok(())
     }
 }
@@ -293,12 +276,6 @@ mod tests {
     #[test]
     fn validate_rejects_invalid_since() {
         let cli = Cli::try_parse_from(["rstn", "--since", "bogus", "q"]).unwrap();
-        assert!(cli.validate().is_err());
-    }
-
-    #[test]
-    fn validate_rejects_invalid_exclude_pod_regex() {
-        let cli = Cli::try_parse_from(["rstn", "--exclude-pod", "(unclosed", "q"]).unwrap();
         assert!(cli.validate().is_err());
     }
 

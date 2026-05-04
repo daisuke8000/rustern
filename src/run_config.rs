@@ -9,31 +9,12 @@ use rustern_core::{FilterOn, QueryMode};
 
 use crate::cli::{Cli, ColorArg, FilterOnArg, FormatArg, JqModeArg, parse_since};
 
-fn normalized_namespaces(cli: &Cli) -> Vec<String> {
-    let mut out = Vec::new();
-    for part in &cli.namespaces {
-        for seg in part.split(',') {
-            let t = seg.trim();
-            if t.is_empty() {
-                continue;
-            }
-            if !out.iter().any(|n| n == t) {
-                out.push(t.to_string());
-            }
-        }
-    }
-    if out.is_empty() {
-        vec!["default".to_string()]
-    } else {
-        out
-    }
-}
-
 impl Cli {
     /// Build a [`CoreRunConfig`] from parsed CLI flags. Does not run the pipeline.
     ///
     /// Call [`Cli::validate`] first so flags are checked. If `validate` is skipped, `--since`
     /// parsing may still fail here with the same error strings as validation.
+    #[must_use]
     pub fn core_run_config(&self, root_token: CancellationToken) -> Result<CoreRunConfig, String> {
         let since = self.since.as_deref().map(parse_since).transpose()?;
 
@@ -53,21 +34,12 @@ impl Cli {
             FormatArg::Raw => (OutputMode::Raw, FormatterChoice::Raw),
         };
 
-        let namespaces = if self.all_namespaces {
-            Vec::new()
-        } else {
-            normalized_namespaces(self)
-        };
-
         Ok(CoreRunConfig {
             context: self.context_selector(),
             query: self.query.clone(),
-            namespaces,
+            namespace: self.namespace.clone(),
             all_namespaces: self.all_namespaces,
             selector: self.selector.clone(),
-            field_selector: self.field_selector.clone(),
-            node: self.node.clone(),
-            exclude_pod: self.exclude_pod.clone(),
             container: self.container.clone(),
             exclude_container: self.exclude_container.clone(),
             follow: self.follow(),
@@ -115,7 +87,7 @@ mod tests {
         assert_eq!(cfg.query, "myapp.*");
         assert!(cfg.follow);
         assert!(!cfg.all_namespaces);
-        assert_eq!(cfg.namespaces, vec!["default"]);
+        assert_eq!(cfg.namespace, None);
         assert_eq!(cfg.container, ".*");
         assert!(matches!(cfg.output, OutputMode::Default));
         assert!(matches!(
@@ -148,7 +120,7 @@ mod tests {
         .unwrap();
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-        assert_eq!(cfg.namespaces, vec!["kube-system"]);
+        assert_eq!(cfg.namespace.as_deref(), Some("kube-system"));
         assert!(!cfg.follow);
         assert!(matches!(cfg.output, OutputMode::Json));
         assert!(matches!(cfg.formatter, FormatterChoice::Json));
@@ -163,7 +135,6 @@ mod tests {
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(cfg.all_namespaces);
-        assert!(cfg.namespaces.is_empty());
         assert_eq!(cfg.selector.as_deref(), Some("app=myapp"));
     }
 
@@ -248,44 +219,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn maps_comma_and_repeat_namespaces() {
-        let cli = Cli::try_parse_from([
-            "rstn",
-            "-n",
-            "a,b",
-            "--namespace",
-            "b",
-            "--namespace",
-            "c",
-            "x",
-        ])
-        .unwrap();
-        cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-        assert_eq!(cfg.namespaces, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn maps_field_selector_and_node_and_exclude_pod() {
-        let cli = Cli::try_parse_from([
-            "rstn",
-            "--field-selector",
-            "status.phase=Running",
-            "--node",
-            "worker-1",
-            "--exclude-pod",
-            "junk-.*",
-            ".*",
-        ])
-        .unwrap();
-        cli.validate().unwrap();
-        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-        assert_eq!(cfg.field_selector.as_deref(), Some("status.phase=Running"));
-        assert_eq!(cfg.node.as_deref(), Some("worker-1"));
-        assert_eq!(cfg.exclude_pod, vec!["junk-.*".to_string()]);
     }
 
     #[test]
