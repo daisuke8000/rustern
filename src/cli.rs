@@ -102,9 +102,9 @@ pub struct Cli {
     #[arg(long, default_value_t = true)]
     pub timestamps: bool,
 
-    /// Color (default formatter)
-    #[arg(long, default_value_t = true)]
-    pub color: bool,
+    /// Color output policy for the default formatter (`auto` if stdout is a TTY)
+    #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
+    pub color: ColorArg,
 
     /// Pipeline→renderer channel size
     #[arg(long, default_value_t = 4096)]
@@ -132,6 +132,14 @@ pub enum JqModeArg {
     Filter,
     Replace,
     Append,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum ColorArg {
+    #[default]
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
