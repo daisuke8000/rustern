@@ -43,7 +43,10 @@ async fn main() {
         listen_windows_shutdown(sig_reason, sig_token).await;
     });
 
-    let cfg = cli.core_run_config(root_token);
+    let cfg = match cli.core_run_config(root_token) {
+        Ok(cfg) => cfg,
+        Err(msg) => report::fail_msg(msg),
+    };
 
     match rustern_core::run(cfg).await {
         Ok(outcome) => {
