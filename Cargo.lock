@@ -1608,6 +1608,7 @@ dependencies = [
  "humantime",
  "miette",
  "predicates",
+ "regex",
  "rustern-core",
  "tokio",
  "tokio-util",
