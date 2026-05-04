@@ -28,7 +28,8 @@ fn requires_query() {
         .unwrap()
         .assert()
         .failure()
-        .code(2);
+        .code(2)
+        .stderr(predicate::str::contains("<QUERY>"));
 }
 
 #[test]
@@ -38,7 +39,8 @@ fn validate_rejects_negative_tail() {
         .args(["--tail=-1", "x"])
         .assert()
         .failure()
-        .code(1);
+        .code(1)
+        .stderr(predicate::str::contains("--tail must be >= 0"));
 }
 
 #[test]
@@ -48,5 +50,6 @@ fn namespace_and_all_namespaces_conflict() {
         .args(["-n", "ns", "-A", "x"])
         .assert()
         .failure()
-        .code(2);
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
 }
