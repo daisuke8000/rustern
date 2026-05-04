@@ -94,7 +94,7 @@ mod tests {
             cfg.formatter,
             FormatterChoice::Default {
                 show_timestamps: true,
-                color_enabled: false,
+                ..
             }
         ));
         assert_eq!(cfg.fwd.buffer_size, 4096);
@@ -190,6 +190,21 @@ mod tests {
     fn core_run_config_errors_on_invalid_since_without_validate() {
         let cli = Cli::try_parse_from(["rstn", "--since", "not-a-time", "q"]).unwrap();
         assert!(cli.core_run_config(CancellationToken::new()).is_err());
+    }
+
+    #[test]
+    fn maps_color_auto_matches_stdout_tty() {
+        let cli = Cli::try_parse_from(["rstn", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        let expect = io::stdout().is_terminal();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                color_enabled,
+                ..
+            } if color_enabled == expect
+        ));
     }
 
     #[test]
