@@ -38,9 +38,7 @@ impl Cli {
             since: self
                 .since
                 .as_deref()
-                .map(|s| {
-                    parse_since(s).expect("call Cli::validate before core_run_config")
-                }),
+                .map(|s| parse_since(s).expect("call Cli::validate before core_run_config")),
             include: self.include.clone(),
             exclude: self.exclude.clone(),
             filter_on: match self.filter_on {
