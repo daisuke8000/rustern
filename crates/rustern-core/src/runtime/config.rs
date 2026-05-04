@@ -33,9 +33,14 @@ pub enum FormatterChoice {
 pub struct CoreRunConfig {
     pub context: ContextSelector,
     pub query: String,
-    pub namespace: Option<String>,
+    /// Namespaces to watch. Empty iff `all_namespaces` (ignored for API scope).
+    pub namespaces: Vec<String>,
     pub all_namespaces: bool,
     pub selector: Option<String>,
+    pub field_selector: Option<String>,
+    pub node: Option<String>,
+    /// Pod name regex patterns; exclude pods matching any.
+    pub exclude_pod: Vec<String>,
     pub container: String,
     pub exclude_container: Option<String>,
     pub follow: bool,
