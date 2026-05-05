@@ -83,10 +83,10 @@ async fn mux_multiplex_loop(
                 }
             }
             item = map.next() => {
-                if let Some((_k, row)) = item {
-                    if raw_event_tx.send(row).await.is_err() {
-                        break;
-                    }
+                if let Some((_k, row)) = item
+                    && raw_event_tx.send(row).await.is_err()
+                {
+                    break;
                 }
             }
         }
@@ -98,6 +98,8 @@ struct PodWatchCtx {
     pod_regex: Option<Regex>,
     container_incl: Regex,
     container_excl: Option<Regex>,
+    allowed_ns: Option<HashSet<String>>,
+    exclude_pod: Vec<Regex>,
     mux_tx: mpsc::Sender<MuxCmd>,
     client: Client,
     root_child: CancellationToken,
@@ -171,10 +173,19 @@ async fn handle_watch_apply(
     ctx: &Arc<PodWatchCtx>,
 ) {
     let name = pod.metadata.name.clone().unwrap_or_default();
-    if let Some(re) = &ctx.pod_regex {
-        if !re.is_match(&name) {
+    if let Some(allowed) = &ctx.allowed_ns {
+        let ns = pod.metadata.namespace.as_deref().unwrap_or("");
+        if !allowed.contains(ns) {
             return;
         }
+    }
+    if ctx.exclude_pod.iter().any(|re| re.is_match(&name)) {
+        return;
+    }
+    if let Some(re) = &ctx.pod_regex
+        && !re.is_match(&name)
+    {
+        return;
     }
     let keys: Vec<_> = keys_from_pod(&pod, &ctx.context_name)
         .into_iter()
@@ -199,10 +210,19 @@ fn collect_keys_snapshot(pending_pods: Vec<Pod>, ctx: &PodWatchCtx) -> HashSet<S
     let mut snap: HashSet<SourceKey> = HashSet::new();
     for pod in pending_pods {
         let name = pod.metadata.name.clone().unwrap_or_default();
-        if let Some(re) = &ctx.pod_regex {
-            if !re.is_match(&name) {
+        if let Some(allowed) = &ctx.allowed_ns {
+            let ns = pod.metadata.namespace.as_deref().unwrap_or("");
+            if !allowed.contains(ns) {
                 continue;
             }
+        }
+        if ctx.exclude_pod.iter().any(|re| re.is_match(&name)) {
+            continue;
+        }
+        if let Some(re) = &ctx.pod_regex
+            && !re.is_match(&name)
+        {
+            continue;
         }
         for k in keys_from_pod(&pod, &ctx.context_name) {
             if !ctx.container_incl.is_match(&k.container) {
@@ -283,10 +303,37 @@ fn spawn_pipeline_forward_task(
     ))
 }
 
+/// Merge user field selector fragments with stern-style node pinning (`spec.nodeName`).
+fn combined_field_selector(cfg: &CoreRunConfig) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(fs) = cfg.field_selector.as_ref() {
+        let t = fs.trim();
+        if !t.is_empty() {
+            parts.push(t.to_string());
+        }
+    }
+    if let Some(n) = cfg.node.as_ref() {
+        let t = n.trim();
+        if !t.is_empty() {
+            parts.push(format!("spec.nodeName={t}"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(","))
+    }
+}
+
 /// Main entry: watcher → `StreamMap` → pipeline → stdout.
 pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let client = build_client(&cfg.context).await?;
-    let q = parse_query(&cfg.query)?;
+    let query_src = if cfg.selector.is_some() && cfg.query == "." {
+        ".*"
+    } else {
+        cfg.query.as_str()
+    };
+    let q = parse_query(query_src)?;
     let pod_regex = match &q {
         Query::PodNameRegex(re) => Some(Regex::new(re)?),
         Query::LabelSelector { .. } => None,
@@ -302,10 +349,19 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     } else if let Some((kind, name)) = &kind_name {
         list = list.labels(&label_selector_for(*kind, name));
     }
+    if let Some(fs) = combined_field_selector(&cfg) {
+        list = list.fields(&fs);
+    }
 
-    let watch_cfg = match list.label_selector.as_ref() {
-        Some(ls) => WatchConfig::default().labels(ls.as_str()),
-        None => WatchConfig::default(),
+    let watch_cfg = {
+        let mut wc = WatchConfig::default();
+        if let Some(ls) = list.label_selector.as_deref() {
+            wc = wc.labels(ls);
+        }
+        if let Some(fs) = list.field_selector.as_deref() {
+            wc = wc.fields(fs);
+        }
+        wc
     };
 
     let kube_cfg = resolve_kubeconfig(&cfg.context)?;
@@ -325,11 +381,22 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         None => None,
     };
 
-    let api: Api<Pod> = if cfg.all_namespaces {
-        Api::all(client.clone())
+    let exclude_pod: Vec<Regex> = cfg
+        .exclude_pod
+        .iter()
+        .map(|p| Regex::new(p))
+        .collect::<Result<_, _>>()
+        .map_err(|e| RunError::Other(format!("invalid exclude-pod regex: {e}")))?;
+
+    let (api, allowed_ns): (Api<Pod>, Option<HashSet<String>>) = if cfg.all_namespaces {
+        (Api::all(client.clone()), None)
+    } else if cfg.namespaces.len() == 1 {
+        (Api::namespaced(client.clone(), &cfg.namespaces[0]), None)
     } else {
-        let ns = cfg.namespace.clone().unwrap_or_else(|| "default".into());
-        Api::namespaced(client.clone(), &ns)
+        (
+            Api::all(client.clone()),
+            Some(cfg.namespaces.iter().cloned().collect()),
+        )
     };
 
     let w = watcher(api, watch_cfg);
@@ -388,6 +455,8 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         pod_regex,
         container_incl,
         container_excl,
+        allowed_ns,
+        exclude_pod,
         client,
         root_child: cfg.root_token.clone(),
         follow: cfg.follow,

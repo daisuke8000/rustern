@@ -3,6 +3,7 @@ use regex::Regex;
 
 use crate::source::{LogEvent, LogSourceError};
 
+/// Filter streamed log lines to containers matching `include` but not optional `exclude`.
 pub fn container_filter<S>(
     inner: S,
     include: Regex,
@@ -21,10 +22,10 @@ where
                     if !include.is_match(name) {
                         return None;
                     }
-                    if let Some(ref re) = exclude {
-                        if re.is_match(name) {
-                            return None;
-                        }
+                    if let Some(ref re) = exclude
+                        && re.is_match(name)
+                    {
+                        return None;
                     }
                     Some(Ok(ev))
                 }

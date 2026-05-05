@@ -30,6 +30,7 @@ pub fn build_log_params(
     }
 }
 
+/// Live pod log [`LogSource`] that streams newline-delimited events from kube.
 pub struct PodLogSource {
     meta: Arc<SourceMeta>,
     token: CancellationToken,
@@ -62,6 +63,7 @@ impl PodLogSource {
         Arc::downgrade(&this.meta)
     }
 
+    /// Start tailing stdout/stderr logs for [`SourceMeta`] (connects kube log subresource).
     pub async fn start(
         client: Client,
         meta: SourceMeta,
@@ -141,10 +143,10 @@ async fn log_stream_with_retry(
 }
 
 fn parse_timestamp(raw: &str) -> (DateTime<Utc>, String) {
-    if let Some((ts_s, msg)) = raw.split_once(' ') {
-        if let Ok(ts) = DateTime::parse_from_rfc3339(ts_s) {
-            return (ts.with_timezone(&Utc), msg.to_string());
-        }
+    if let Some((ts_s, msg)) = raw.split_once(' ')
+        && let Ok(ts) = DateTime::parse_from_rfc3339(ts_s)
+    {
+        return (ts.with_timezone(&Utc), msg.to_string());
     }
     (Utc::now(), raw.to_string())
 }
