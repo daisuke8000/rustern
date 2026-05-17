@@ -177,6 +177,27 @@ fn filtered_stream_keys(pod: &Pod, ctx: &PodWatchCtx) -> Vec<SourceKey> {
         .collect()
 }
 
+/// Keys currently tracked for this Pod (`metadata.uid` disambiguates rollouts).
+fn keys_for_deleted_pod(
+    pod: &Pod,
+    ctx: &PodWatchCtx,
+    active: &HashSet<SourceKey>,
+) -> Vec<SourceKey> {
+    let ns = pod.metadata.namespace.clone().unwrap_or_default();
+    let pod_name = pod.metadata.name.clone().unwrap_or_default();
+    let uid_opt = pod.metadata.uid.as_deref();
+    active
+        .iter()
+        .filter(|k| {
+            k.context == ctx.context_name
+                && k.namespace == ns
+                && k.pod == pod_name
+                && uid_opt.map_or(true, |u| k.uid == u)
+        })
+        .cloned()
+        .collect()
+}
+
 async fn handle_watch_delete(
     pod: Pod,
     active: &mut HashSet<SourceKey>,
@@ -184,7 +205,8 @@ async fn handle_watch_delete(
     mux_tx: &mpsc::Sender<MuxCmd>,
     ctx: &PodWatchCtx,
 ) {
-    for k in filtered_stream_keys(&pod, ctx) {
+    let keys = keys_for_deleted_pod(&pod, ctx, active);
+    for k in keys {
         if let Some(t) = tokens.remove(&k) {
             t.cancel();
         }

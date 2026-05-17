@@ -224,7 +224,7 @@ mod kube_tests {
     use crate::source::ContextName;
     use k8s_openapi::api::core::v1::{
         Container, ContainerState, ContainerStateRunning, ContainerStateTerminated,
-        ContainerStatus, PodSpec, PodStatus,
+        ContainerStateWaiting, ContainerStatus, EphemeralContainer, PodSpec, PodStatus,
     };
     use kube::core::ObjectMeta;
 
@@ -239,6 +239,14 @@ mod kube_tests {
         let mut init_vec = Vec::new();
         for n in extra.init {
             init_vec.push(Container {
+                name: (*n).into(),
+                ..Default::default()
+            });
+        }
+
+        let mut ephem_vec = Vec::new();
+        for n in extra.ephemeral {
+            ephem_vec.push(EphemeralContainer {
                 name: (*n).into(),
                 ..Default::default()
             });
@@ -264,6 +272,11 @@ mod kube_tests {
                 } else {
                     Some(init_vec)
                 },
+                ephemeral_containers: if ephem_vec.is_empty() {
+                    None
+                } else {
+                    Some(ephem_vec)
+                },
                 ..Default::default()
             }),
             status: Some(PodStatus {
@@ -277,12 +290,25 @@ mod kube_tests {
 
     struct ExtraPodPieces<'a> {
         init: &'a [&'a str],
+        ephemeral: &'a [&'a str],
     }
 
     struct PodStatusPieces {
         container_statuses: Option<Vec<ContainerStatus>>,
         init_container_statuses: Option<Vec<ContainerStatus>>,
         ephemeral_container_statuses: Option<Vec<ContainerStatus>>,
+    }
+
+    fn waiting_status(nm: &str) -> ContainerStatus {
+        ContainerStatus {
+            name: nm.into(),
+            state: Some(ContainerState {
+                running: None,
+                waiting: Some(ContainerStateWaiting::default()),
+                terminated: None,
+            }),
+            ..Default::default()
+        }
     }
 
     fn running_status(nm: &str) -> ContainerStatus {
@@ -304,7 +330,10 @@ mod kube_tests {
             "ns",
             Some("uid-aaa"),
             vec!["app", "sidecar"],
-            ExtraPodPieces { init: &[] },
+            ExtraPodPieces {
+                init: &[],
+                ephemeral: &[],
+            },
             PodStatusPieces {
                 container_statuses: Some(vec![running_status("app"), running_status("sidecar")]),
                 init_container_statuses: None,
@@ -329,7 +358,10 @@ mod kube_tests {
             "ns",
             Some("uid-1"),
             vec!["app"],
-            ExtraPodPieces { init: &["migrate"] },
+            ExtraPodPieces {
+                init: &["migrate"],
+                ephemeral: &[],
+            },
             PodStatusPieces {
                 container_statuses: Some(vec![running_status("app")]),
                 init_container_statuses: Some(vec![running_status("migrate")]),
@@ -357,13 +389,82 @@ mod kube_tests {
     }
 
     #[test]
+    fn keys_include_ephemeral_when_enabled() {
+        let pod = pod_with(
+            "p1",
+            "ns",
+            Some("uid-e"),
+            vec!["app"],
+            ExtraPodPieces {
+                init: &[],
+                ephemeral: &["dbg"],
+            },
+            PodStatusPieces {
+                container_statuses: Some(vec![running_status("app")]),
+                init_container_statuses: None,
+                ephemeral_container_statuses: Some(vec![running_status("dbg")]),
+            },
+        );
+
+        let with_eph = ContainerDiscoverOpts {
+            include_ephemeral_containers: true,
+            include_init_containers: false,
+            ..Default::default()
+        };
+        let keys = keys_from_pod(&pod, &ContextName("ctx".into()), &with_eph);
+        assert!(keys.iter().any(|k| k.container == "dbg"));
+        assert!(keys.iter().any(|k| k.container == "app"));
+
+        let sans_eph = ContainerDiscoverOpts {
+            include_ephemeral_containers: false,
+            include_init_containers: false,
+            ..Default::default()
+        };
+        let keys2 = keys_from_pod(&pod, &ContextName("ctx".into()), &sans_eph);
+        assert!(!keys2.iter().any(|k| k.container == "dbg"));
+        assert!(keys2.iter().any(|k| k.container == "app"));
+    }
+
+    #[test]
+    fn ephemeral_waiting_dropped_when_running_only_policy() {
+        let pod = pod_with(
+            "p1",
+            "ns",
+            Some("uid-e2"),
+            vec!["app"],
+            ExtraPodPieces {
+                init: &[],
+                ephemeral: &["dbg"],
+            },
+            PodStatusPieces {
+                container_statuses: Some(vec![running_status("app")]),
+                init_container_statuses: None,
+                ephemeral_container_statuses: Some(vec![waiting_status("dbg")]),
+            },
+        );
+        let policy =
+            ContainerStatePolicy::Subset([ContainerLifecycleBucket::Running].into_iter().collect());
+        let opts = ContainerDiscoverOpts {
+            include_init_containers: false,
+            include_ephemeral_containers: true,
+            state_policy: policy,
+        };
+        let keys = keys_from_pod(&pod, &ContextName("ctx".into()), &opts);
+        assert!(keys.iter().any(|k| k.container == "app"));
+        assert!(!keys.iter().any(|k| k.container == "dbg"));
+    }
+
+    #[test]
     fn keys_skipped_when_uid_missing() {
         let pod = pod_with(
             "p1",
             "ns",
             None,
             vec!["app"],
-            ExtraPodPieces { init: &[] },
+            ExtraPodPieces {
+                init: &[],
+                ephemeral: &[],
+            },
             PodStatusPieces {
                 container_statuses: Some(vec![running_status("app")]),
                 init_container_statuses: None,
@@ -385,7 +486,10 @@ mod kube_tests {
             "ns",
             Some("uid-old"),
             vec!["app"],
-            ExtraPodPieces { init: &[] },
+            ExtraPodPieces {
+                init: &[],
+                ephemeral: &[],
+            },
             PodStatusPieces {
                 container_statuses: Some(vec![running_status("app")]),
                 init_container_statuses: None,
@@ -397,7 +501,10 @@ mod kube_tests {
             "ns",
             Some("uid-new"),
             vec!["app"],
-            ExtraPodPieces { init: &[] },
+            ExtraPodPieces {
+                init: &[],
+                ephemeral: &[],
+            },
             PodStatusPieces {
                 container_statuses: Some(vec![running_status("app")]),
                 init_container_statuses: None,
@@ -439,7 +546,10 @@ mod kube_tests {
             "ns",
             Some("uid-x"),
             vec!["run", "done"],
-            ExtraPodPieces { init: &[] },
+            ExtraPodPieces {
+                init: &[],
+                ephemeral: &[],
+            },
             PodStatusPieces {
                 container_statuses: Some(vec![running_status("run"), terminated]),
                 init_container_statuses: None,

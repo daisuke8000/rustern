@@ -361,6 +361,30 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_conflicting_init_flags() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--no-init-containers",
+            "--init-containers=true",
+            "q",
+        ])
+        .unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_conflicting_ephemeral_flags() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--no-ephemeral-containers",
+            "--ephemeral-containers=true",
+            "q",
+        ])
+        .unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
     fn context_selector_roundtrips_explicit_kubeconfig() {
         let cli = Cli::try_parse_from(["rstn", "--kubeconfig", "/tmp/kube", "q"]).unwrap();
         assert_eq!(

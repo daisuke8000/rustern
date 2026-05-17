@@ -215,6 +215,25 @@ mod tests {
     }
 
     #[test]
+    fn maps_no_ephemeral_containers_flag() {
+        let cli = Cli::try_parse_from(["rstn", "--no-ephemeral-containers", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(!cfg.container_discovery.include_ephemeral_containers);
+    }
+
+    #[test]
+    fn maps_container_state_all_precedence() {
+        let cli = Cli::try_parse_from(["rstn", "--container-state", "running,all", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.container_discovery.state_policy,
+            ContainerStatePolicy::All
+        ));
+    }
+
+    #[test]
     fn maps_minimal_cli_to_core_config() {
         let cli = Cli::try_parse_from(["rstn", "myapp.*"]).unwrap();
         cli.validate().unwrap();

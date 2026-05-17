@@ -73,10 +73,13 @@ mod tests {
     #[tokio::test]
     async fn excludes_when_pattern_set() {
         let s = futures::stream::iter(vec![Ok(ev("app")), Ok(ev("istio-proxy"))]);
-        let excl = Regex::new("istio-proxy").unwrap();
-        let out: Vec<_> = container_filter(s, Regex::new(".*").unwrap(), vec![excl.clone()])
-            .collect()
-            .await;
+        let out: Vec<_> = container_filter(
+            s,
+            Regex::new(".*").unwrap(),
+            vec![Regex::new("istio-proxy").unwrap()],
+        )
+        .collect()
+        .await;
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].as_ref().unwrap().source.container, "app");
     }
