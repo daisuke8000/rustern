@@ -133,6 +133,14 @@ pub struct Cli {
     #[arg(short = 'e', long = "exclude", action = clap::ArgAction::Append)]
     pub exclude: Vec<String>,
 
+    /// Highlight matching text on default-formatted lines (`stern`'s `-H`; merged with `--include`).
+    #[arg(short = 'H', long = "highlight", value_name = "REGEX", action = clap::ArgAction::Append)]
+    pub highlight: Vec<String>,
+
+    /// Hide stern-style +/- stream banners on stderr (rustern has no equivalents today).
+    #[arg(long = "only-log-lines", action = clap::ArgAction::SetTrue)]
+    pub only_log_lines: bool,
+
     /// Stage for include/exclude regex
     #[arg(long, value_enum, default_value_t = FilterOnArg::Original)]
     pub filter_on: FilterOnArg,
@@ -287,6 +295,9 @@ impl Cli {
         for p in &self.exclude_container {
             Regex::new(p).map_err(|e| format!("invalid --exclude-container regex: {e}"))?;
         }
+        for p in &self.highlight {
+            Regex::new(p).map_err(|e| format!("invalid --highlight regex: {e}"))?;
+        }
         Ok(())
     }
 }
@@ -440,6 +451,12 @@ mod tests {
     #[test]
     fn validate_rejects_invalid_exclude_pod_regex() {
         let cli = Cli::try_parse_from(["rstn", "--exclude-pod", "(unclosed", "q"]).unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_highlight_regex() {
+        let cli = Cli::try_parse_from(["rstn", "--highlight", "(unclosed", "q"]).unwrap();
         assert!(cli.validate().is_err());
     }
 

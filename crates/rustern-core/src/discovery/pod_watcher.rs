@@ -105,19 +105,19 @@ fn collect_candidates(
         out.push((c.name.clone(), ContainerPlacement::Main));
     }
 
-    if opts.include_init_containers {
-        if let Some(inits) = spec.init_containers.as_ref() {
-            for c in inits {
-                out.push((c.name.clone(), ContainerPlacement::Init));
-            }
+    if opts.include_init_containers
+        && let Some(inits) = spec.init_containers.as_ref()
+    {
+        for c in inits {
+            out.push((c.name.clone(), ContainerPlacement::Init));
         }
     }
 
-    if opts.include_ephemeral_containers {
-        if let Some(ephems) = spec.ephemeral_containers.as_ref() {
-            for c in ephems {
-                out.push((c.name.clone(), ContainerPlacement::Ephemeral));
-            }
+    if opts.include_ephemeral_containers
+        && let Some(ephems) = spec.ephemeral_containers.as_ref()
+    {
+        for c in ephems {
+            out.push((c.name.clone(), ContainerPlacement::Ephemeral));
         }
     }
 

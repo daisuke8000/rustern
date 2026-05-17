@@ -146,6 +146,8 @@ impl Cli {
             since,
             include: self.include.clone(),
             exclude: self.exclude.clone(),
+            highlight: self.highlight.clone(),
+            only_log_lines: self.only_log_lines,
             filter_on: match self.filter_on {
                 FilterOnArg::Original => FilterOn::Original,
                 FilterOnArg::Transformed => FilterOn::Transformed,
@@ -435,5 +437,23 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn maps_highlight_and_only_log_lines() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--no-follow",
+            "-H",
+            "panic",
+            "--only-log-lines",
+            ".",
+        ])
+        .unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert_eq!(cfg.highlight, vec!["panic".to_string()]);
+        assert!(cfg.only_log_lines);
+        assert!(cfg.include.is_empty());
     }
 }

@@ -79,6 +79,10 @@ pub struct CoreRunConfig {
     pub include: Vec<String>,
     /// Line-level exclude regex filters.
     pub exclude: Vec<String>,
+    /// Substrings emphasized (bold/red) after default formatter output; merges with [`Self::include`] like stern `-H`.
+    pub highlight: Vec<String>,
+    /// Omit stream lifecycle chatter on stderr (stern +/- lines); rustern currently emits none.
+    pub only_log_lines: bool,
     /// Regex stage selector (plain vs jq-transformed payload).
     pub filter_on: FilterOn,
     /// Optional jaq-like transform filter.
@@ -108,6 +112,8 @@ pub enum RunError {
     ContainerRegex(#[from] regex::Error),
     #[error(transparent)]
     Jq(#[from] crate::pipeline::JqError),
+    #[error(transparent)]
+    Kube(#[from] kube::Error),
     #[error("{0}")]
     Other(String),
 }

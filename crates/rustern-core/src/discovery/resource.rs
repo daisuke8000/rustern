@@ -98,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_to_app_label() {
+    fn fallback_deployment_maps_to_app_label() {
         assert_eq!(
             label_selector_for(ResourceKind::Deployment, "api"),
             "app=api"
