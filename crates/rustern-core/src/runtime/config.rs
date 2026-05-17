@@ -3,6 +3,7 @@
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::context::ContextSelector;
+use crate::format_display::{TimestampStyle, TimestampZone};
 use crate::pipeline::{FilterOn, QueryMode};
 
 /// Bounded queue and parallelism hints for forwarded log events (`run` runtime).
@@ -32,7 +33,8 @@ pub enum OutputMode {
 pub enum FormatterChoice {
     /// Prefix / color / timestamps for terminal-friendly output.
     Default {
-        show_timestamps: bool,
+        timestamp_style: TimestampStyle,
+        timestamp_zone: TimestampZone,
         color_enabled: bool,
     },
     /// NDJSON emitter.

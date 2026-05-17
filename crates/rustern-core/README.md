@@ -34,7 +34,7 @@ Index of `src/` paths and roles.
 |------|------|
 | `lib.rs` | Public modules and `pub use` |
 | `runtime/mod.rs` | Module layout and `pub use` (see below) |
-| `runtime/orchestrate.rs` | **`run`** (watch / spawn wiring) |
+| `runtime/runner.rs` | **`run`** (watch / spawn wiring) |
 | `runtime/forward.rs` | **`forward_to_render`**, `LossyMetrics`, log semaphore |
 | `runtime/pipeline.rs` | **`apply_pipeline`** (stream wrapper used only by `run`) |
 | `runtime/config.rs` | **`CoreRunConfig`**, `RunError`, `RuntimeFwdConfig`, etc. |
@@ -65,7 +65,7 @@ flowchart TD
     end
 
     subgraph L4 [L4: Orchestration]
-        Runtime["runtime::orchestrate<br/>(run)"]
+        Runtime["runtime::runner<br/>(run)"]
     end
 
     subgraph L3 [L3: Presentation]
@@ -102,7 +102,7 @@ flowchart TD
     style Legend fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
 ```
 
-`runtime::orchestrate::run` references `discovery/context` and `discovery/resource` directly. `pod_watcher` and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
+`runtime::runner::run` references `discovery/context` and `discovery/resource` directly. `pod_watcher` and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
 
 ### Layers explained
 

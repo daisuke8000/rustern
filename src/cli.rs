@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use clap::ValueEnum;
 use regex::Regex;
-use rustern_core::ContextSelector;
+use rustern_core::{ContextSelector, TimestampZone};
 
 /// Tail logs from multiple Kubernetes pods and containers (stern-inspired).
 #[derive(Debug, Parser)]
@@ -81,7 +81,7 @@ pub struct Cli {
     pub tail: Option<i64>,
 
     /// Only logs newer than this duration (`5m`, `2h`, `90s`) or a non-negative integer (seconds)
-    #[arg(long, value_name = "DURATION|SECONDS")]
+    #[arg(short = 's', long = "since", value_name = "DURATION|SECONDS")]
     pub since: Option<String>,
 
     /// Include lines matching regex (repeatable)
@@ -112,9 +112,12 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = FormatArg::Default)]
     pub format: FormatArg,
 
-    /// Timestamps (default formatter)
-    #[arg(long, default_value_t = true)]
-    pub timestamps: bool,
+    /// Stern-style timestamp prefix preset for the default formatter
+    #[arg(long, value_enum, default_value_t = TimestampArg::Default)]
+    pub timestamps: TimestampArg,
+
+    #[arg(long, value_name = "ZONE")]
+    pub timezone: Option<String>,
 
     /// Color output policy for the default formatter (`auto` if stdout is a TTY)
     #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
@@ -128,9 +131,20 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub lossy: bool,
 
-    /// Max concurrent log streams
-    #[arg(long, default_value_t = 32)]
-    pub max_log_requests: usize,
+    #[arg(long, value_name = "N")]
+    pub max_log_requests: Option<usize>,
+}
+
+/// Default-formatter stamp shape (stern-aligned names).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum TimestampArg {
+    #[default]
+    #[value(alias = "rfc3339")]
+    Default,
+    #[value(alias = "off")]
+    Omit,
+    Short,
+    Epoch,
 }
 
 /// Regex stage knob for `-i`/`-e` (plain text vs jq output).
@@ -199,8 +213,13 @@ impl Cli {
         if self.buffer_size == 0 {
             return Err("--buffer-size must be > 0".into());
         }
-        if self.max_log_requests == 0 {
-            return Err("--max-log-requests must be > 0".into());
+        if let Some(n) = self.max_log_requests
+            && n == 0
+        {
+            return Err("--max-log-requests must be > 0 when set".into());
+        }
+        if let Some(ref z) = self.timezone {
+            TimestampZone::parse_arg(z)?;
         }
         for p in &self.exclude_pod {
             Regex::new(p).map_err(|e| format!("invalid --exclude-pod regex: {e}"))?;
@@ -317,5 +336,12 @@ mod tests {
     fn validate_accepts_defaults() {
         let cli = Cli::try_parse_from(["rstn", "x"]).unwrap();
         cli.validate().unwrap();
+    }
+
+    #[test]
+    fn since_accepts_short_s_flag() {
+        let cli = Cli::try_parse_from(["rstn", "-s", "2m", "q"]).unwrap();
+        cli.validate().unwrap();
+        assert_eq!(cli.since.as_deref(), Some("2m"));
     }
 }
