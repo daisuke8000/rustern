@@ -1,4 +1,4 @@
-//! Watch → mux → pipeline → stdout lifecycle.
+//! Runner: watch → mux → pipeline → stdout (`run`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -43,10 +43,12 @@ enum MuxCmd {
 fn line_formatter(choice: &FormatterChoice) -> Arc<dyn LineFormatter> {
     match choice {
         FormatterChoice::Default {
-            show_timestamps,
+            timestamp_style,
+            timestamp_zone,
             color_enabled,
         } => Arc::new(DefaultLineFormatter {
-            show_timestamps: *show_timestamps,
+            timestamp_style: *timestamp_style,
+            timestamp_zone: *timestamp_zone,
             color_enabled: *color_enabled,
         }),
         FormatterChoice::Json => Arc::new(JsonLineFormatter),
@@ -107,6 +109,7 @@ struct PodWatchCtx {
     tail: Option<i64>,
     since: Option<i64>,
     sem: Arc<Semaphore>,
+    follow_limit_notifier: Option<mpsc::Sender<()>>,
 }
 
 struct AttachPodLogParams {
@@ -117,9 +120,24 @@ struct AttachPodLogParams {
 }
 
 async fn attach_pod_log_stream(p: AttachPodLogParams) {
-    let Ok(_permit) = Arc::clone(&p.ctx.sem).acquire_owned().await else {
-        return;
+    let permit = if p.ctx.follow {
+        match Arc::clone(&p.ctx.sem).try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                if let Some(tx) = &p.ctx.follow_limit_notifier {
+                    let _ = tx.try_send(());
+                }
+                p.ctx.root_child.cancel();
+                return;
+            }
+        }
+    } else {
+        match Arc::clone(&p.ctx.sem).acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => return,
+        }
     };
+
     let client = p.ctx.client.clone();
     match PodLogSource::start(
         client,
@@ -137,6 +155,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
         }
         Err(e) => tracing::warn!(?e, "pod log start"),
     }
+    drop(permit);
 }
 
 fn spawn_attach_pod_log(ctx: &Arc<PodWatchCtx>, key: SourceKey, pod_token: CancellationToken) {
@@ -406,6 +425,13 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
 
     let sem = build_log_request_semaphore(cfg.fwd.max_log_requests);
 
+    let mut follow_lim: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)> = if cfg.follow {
+        Some(mpsc::channel(1))
+    } else {
+        None
+    };
+    let follow_limit_notifier = follow_lim.as_ref().map(|(s, _)| s.clone());
+
     let h_mux = spawn_mux_task(mux_rx, raw_event_tx);
 
     let metrics = LossyMetrics::new();
@@ -464,6 +490,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         since: cfg.since,
         sem,
         mux_tx: mux_tx.clone(),
+        follow_limit_notifier,
     });
 
     let root_w = cfg.root_token.clone();
@@ -522,6 +549,23 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         }
     });
 
+    let mut limit_hit = false;
+    match follow_lim.take() {
+        Some((_, mut lr)) => {
+            tokio::select! {
+                biased;
+                r = lr.recv() => {
+                    if r.is_some() {
+                        limit_hit = true;
+                        cfg.root_token.cancel();
+                    }
+                }
+                _ = cfg.root_token.cancelled() => {}
+            }
+        }
+        None => cfg.root_token.cancelled().await,
+    }
+
     cfg.root_token.cancelled().await;
     let _ = render_tx.send(RenderCommand::Shutdown).await;
     let _ = tokio::time::timeout(Duration::from_millis(150), render_h).await;
@@ -529,6 +573,12 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     watch_h.abort();
     h_mux.abort();
     pipe_h.abort();
+
+    if limit_hit {
+        return Err(RunError::Other(
+            "max concurrent log streams reached (--max-log-requests)".into(),
+        ));
+    }
 
     Ok(RunOutcome {
         had_source_errors: false,

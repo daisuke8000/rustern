@@ -1,3 +1,6 @@
+use chrono::{DateTime, Local, SecondsFormat, Utc};
+
+use crate::format_display::{TimestampStyle, TimestampZone};
 use crate::render::LineFormatter;
 use crate::source::LogEvent;
 
@@ -13,15 +16,49 @@ const PALETTE: &[(u8, u8, u8)] = &[
 ];
 
 pub struct DefaultLineFormatter {
-    pub show_timestamps: bool,
+    pub timestamp_style: TimestampStyle,
+    pub timestamp_zone: TimestampZone,
     pub color_enabled: bool,
+}
+
+fn format_wall_prefix(
+    dt_utc: &DateTime<Utc>,
+    style: TimestampStyle,
+    zone: TimestampZone,
+) -> Option<String> {
+    Some(match style {
+        TimestampStyle::Omit => return None,
+        TimestampStyle::EpochSeconds => dt_utc.timestamp().to_string(),
+        TimestampStyle::Rfc3339 => match zone {
+            TimestampZone::Utc => dt_utc.to_rfc3339_opts(SecondsFormat::AutoSi, false),
+            TimestampZone::Local => dt_utc
+                .with_timezone(&Local)
+                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
+            TimestampZone::Iana(tz) => dt_utc
+                .with_timezone(&tz)
+                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
+        },
+        TimestampStyle::SternShort => match zone {
+            TimestampZone::Utc => dt_utc.format("%m-%d %H:%M:%S").to_string(),
+            TimestampZone::Local => dt_utc
+                .with_timezone(&Local)
+                .format("%m-%d %H:%M:%S")
+                .to_string(),
+            TimestampZone::Iana(tz) => dt_utc
+                .with_timezone(&tz)
+                .format("%m-%d %H:%M:%S")
+                .to_string(),
+        },
+    })
 }
 
 impl LineFormatter for DefaultLineFormatter {
     fn format_line(&self, event: &LogEvent) -> String {
         let mut line = String::new();
-        if self.show_timestamps {
-            line.push_str(&event.timestamp.to_rfc3339());
+        if let Some(p) =
+            format_wall_prefix(&event.timestamp, self.timestamp_style, self.timestamp_zone)
+        {
+            line.push_str(&p);
             line.push(' ');
         }
         let prefix = format!("{}/{}", event.source.pod, event.source.container);
@@ -76,7 +113,8 @@ mod tests {
     #[test]
     fn formats_prefix_and_message_no_color() {
         let f = DefaultLineFormatter {
-            show_timestamps: false,
+            timestamp_style: TimestampStyle::Omit,
+            timestamp_zone: TimestampZone::Utc,
             color_enabled: false,
         };
         assert_eq!(f.format_line(&ev()), "p/ctn | hello\n");
@@ -87,7 +125,8 @@ mod tests {
         let (mut rd, wr) = duplex(4096);
         let (tx, rx) = mpsc::channel::<RenderCommand>(8);
         let f = DefaultLineFormatter {
-            show_timestamps: false,
+            timestamp_style: TimestampStyle::Omit,
+            timestamp_zone: TimestampZone::Utc,
             color_enabled: false,
         };
         let h = tokio::spawn(async move {
