@@ -141,7 +141,8 @@ pub enum TimestampArg {
     #[default]
     #[value(alias = "rfc3339")]
     Default,
-    Off,
+    #[value(alias = "off")]
+    Omit,
     Short,
     Epoch,
 }

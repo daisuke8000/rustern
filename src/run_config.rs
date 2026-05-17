@@ -39,7 +39,7 @@ impl Cli {
         let since = self.since.as_deref().map(parse_since).transpose()?;
 
         let timestamp_style = match self.timestamps {
-            TimestampArg::Off => TimestampStyle::Omit,
+            TimestampArg::Omit => TimestampStyle::Omit,
             TimestampArg::Default => TimestampStyle::Rfc3339,
             TimestampArg::Short => TimestampStyle::SternShort,
             TimestampArg::Epoch => TimestampStyle::EpochSeconds,
