@@ -15,7 +15,7 @@ pub(super) fn compile_list(p: &[String]) -> Result<Vec<Regex>, regex::Error> {
 
 pub(super) struct PipelineStages {
     pub container_incl: Regex,
-    pub container_excl: Option<Regex>,
+    pub container_excl: Vec<Regex>,
     pub includes: Vec<Regex>,
     pub excludes: Vec<Regex>,
     pub filter_on: FilterOn,

@@ -49,7 +49,7 @@ async fn mock_logs_through_pipeline_and_renderer() {
         .unwrap();
 
     let stream = Box::new(source).into_stream();
-    let stream = container_filter(stream, Regex::new("app").unwrap(), None);
+    let stream = container_filter(stream, Regex::new("app").unwrap(), Vec::new());
     let stream = json_annotate(stream);
     let stream = level_classify(stream, Some("level".into()));
     let stream = color_assign(stream);
