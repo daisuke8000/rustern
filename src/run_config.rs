@@ -1,13 +1,19 @@
 //! Map [`crate::cli::Cli`] into [`rustern_core::CoreRunConfig`].
 
+use std::collections::HashSet;
 use std::io::{self, IsTerminal};
 
 use tokio_util::sync::CancellationToken;
 
+use rustern_core::discovery::pod_watcher::{
+    ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
+};
 use rustern_core::{CoreRunConfig, FormatterChoice, OutputMode, RuntimeFwdConfig};
 use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 
-use crate::cli::{Cli, ColorArg, FilterOnArg, FormatArg, JqModeArg, TimestampArg, parse_since};
+use crate::cli::{
+    Cli, ColorArg, ContainerStateArg, FilterOnArg, FormatArg, JqModeArg, TimestampArg, parse_since,
+};
 
 /// Deduped namespaces from repeatable `--namespace`/comma inputs; defaults to `[default]` when omitted.
 fn normalized_namespaces(cli: &Cli) -> Vec<String> {
@@ -28,6 +34,48 @@ fn normalized_namespaces(cli: &Cli) -> Vec<String> {
     } else {
         out
     }
+}
+
+fn resolved_init_include(cli: &Cli) -> bool {
+    if cli.no_init_containers {
+        false
+    } else {
+        cli.init_containers.unwrap_or(true)
+    }
+}
+
+fn resolved_ephemeral_include(cli: &Cli) -> bool {
+    if cli.no_ephemeral_containers {
+        false
+    } else {
+        cli.ephemeral_containers.unwrap_or(true)
+    }
+}
+
+fn resolved_container_state_policy(states: &[ContainerStateArg]) -> ContainerStatePolicy {
+    use ContainerStateArg as A;
+    if states.is_empty() {
+        return ContainerStatePolicy::All;
+    }
+    if states.iter().copied().any(|s| s == A::All) {
+        return ContainerStatePolicy::All;
+    }
+    let mut hs = HashSet::new();
+    for s in states {
+        match s {
+            A::Running => {
+                hs.insert(ContainerLifecycleBucket::Running);
+            }
+            A::Waiting => {
+                hs.insert(ContainerLifecycleBucket::Waiting);
+            }
+            A::Terminated => {
+                hs.insert(ContainerLifecycleBucket::Terminated);
+            }
+            A::All => {}
+        }
+    }
+    ContainerStatePolicy::Subset(hs)
 }
 
 impl Cli {
@@ -88,6 +136,11 @@ impl Cli {
             exclude_pod: self.exclude_pod.clone(),
             container: self.container.clone(),
             exclude_container: self.exclude_container.clone(),
+            container_discovery: ContainerDiscoverOpts {
+                include_init_containers: resolved_init_include(self),
+                include_ephemeral_containers: resolved_ephemeral_include(self),
+                state_policy: resolved_container_state_policy(&self.container_states),
+            },
             follow: self.follow(),
             tail: self.tail,
             since,
@@ -124,6 +177,61 @@ mod tests {
     use clap::Parser;
     use rustern_core::FilterOn;
     use rustern_core::QueryMode;
+    use rustern_core::discovery::pod_watcher::{ContainerLifecycleBucket, ContainerStatePolicy};
+
+    #[test]
+    fn maps_container_discovery_exclude_and_state() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "-E",
+            "a",
+            "-E",
+            "b",
+            "--no-init-containers",
+            "--container-state",
+            "running",
+            "q",
+        ])
+        .unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert_eq!(cfg.exclude_container, vec!["a", "b"]);
+        assert!(!cfg.container_discovery.include_init_containers);
+        assert!(cfg.container_discovery.include_ephemeral_containers);
+        let ContainerStatePolicy::Subset(ref hs) = cfg.container_discovery.state_policy else {
+            panic!("expected subset policy");
+        };
+        assert!(hs.len() == 1 && hs.contains(&ContainerLifecycleBucket::Running));
+
+        let cli_default = Cli::try_parse_from(["rstn", "q"]).unwrap();
+        cli_default.validate().unwrap();
+        assert!(
+            cli_default
+                .core_run_config(CancellationToken::new())
+                .unwrap()
+                .container_discovery
+                .include_init_containers
+        );
+    }
+
+    #[test]
+    fn maps_no_ephemeral_containers_flag() {
+        let cli = Cli::try_parse_from(["rstn", "--no-ephemeral-containers", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(!cfg.container_discovery.include_ephemeral_containers);
+    }
+
+    #[test]
+    fn maps_container_state_all_precedence() {
+        let cli = Cli::try_parse_from(["rstn", "--container-state", "running,all", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.container_discovery.state_policy,
+            ContainerStatePolicy::All
+        ));
+    }
 
     #[test]
     fn maps_minimal_cli_to_core_config() {

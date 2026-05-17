@@ -3,11 +3,11 @@ use regex::Regex;
 
 use crate::source::{LogEvent, LogSourceError};
 
-/// Filter streamed log lines to containers matching `include` but not optional `exclude`.
+/// Filter streamed log lines to containers matching `include` but not any regex in `exclude`.
 pub fn container_filter<S>(
     inner: S,
     include: Regex,
-    exclude: Option<Regex>,
+    exclude: Vec<Regex>,
 ) -> impl Stream<Item = Result<LogEvent, LogSourceError>>
 where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
@@ -22,9 +22,7 @@ where
                     if !include.is_match(name) {
                         return None;
                     }
-                    if let Some(ref re) = exclude
-                        && re.is_match(name)
-                    {
+                    if exclude.iter().any(|re| re.is_match(name)) {
                         return None;
                     }
                     Some(Ok(ev))
@@ -65,7 +63,7 @@ mod tests {
     #[tokio::test]
     async fn keeps_matching_only() {
         let s = futures::stream::iter(vec![Ok(ev("app")), Ok(ev("sidecar"))]);
-        let out: Vec<_> = container_filter(s, Regex::new("app").unwrap(), None)
+        let out: Vec<_> = container_filter(s, Regex::new("app").unwrap(), Vec::new())
             .collect()
             .await;
         assert_eq!(out.len(), 1);
@@ -78,7 +76,7 @@ mod tests {
         let out: Vec<_> = container_filter(
             s,
             Regex::new(".*").unwrap(),
-            Some(Regex::new("istio-proxy").unwrap()),
+            vec![Regex::new("istio-proxy").unwrap()],
         )
         .collect()
         .await;

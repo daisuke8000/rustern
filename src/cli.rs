@@ -60,9 +60,50 @@ pub struct Cli {
     #[arg(short = 'c', long, default_value = ".*", value_name = "REGEX")]
     pub container: String,
 
-    /// Exclude containers matching this regex
-    #[arg(short = 'E', long, value_name = "REGEX")]
-    pub exclude_container: Option<String>,
+    /// Exclude containers matching this regex (repeat; comma-separated accepted)
+    #[arg(
+        short = 'E',
+        long = "exclude-container",
+        value_name = "REGEX",
+        action = clap::ArgAction::Append,
+        value_delimiter = ','
+    )]
+    pub exclude_container: Vec<String>,
+
+    /// Tail init containers alongside regular containers (`--no-init-containers` to omit; stern-like default yes)
+    #[arg(
+        long = "init-containers",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        require_equals = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub init_containers: Option<bool>,
+
+    #[arg(long = "no-init-containers", action = clap::ArgAction::SetTrue)]
+    pub no_init_containers: bool,
+
+    /// Tail ephemeral containers (stern-like default yes); pass `--no-ephemeral-containers` to omit
+    #[arg(
+        long = "ephemeral-containers",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        require_equals = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub ephemeral_containers: Option<bool>,
+
+    #[arg(long = "no-ephemeral-containers", action = clap::ArgAction::SetTrue)]
+    pub no_ephemeral_containers: bool,
+
+    /// Filter container streams by reported lifecycle bucket (`running`|`waiting`|`terminated`|`all`; repeat or comma-separated)
+    #[arg(
+        long = "container-state",
+        value_enum,
+        action = clap::ArgAction::Append,
+        value_delimiter = ','
+    )]
+    pub container_states: Vec<ContainerStateArg>,
 
     /// Stream logs (`kubectl logs -f`)
     #[arg(short = 'f', long = "follow", action = clap::ArgAction::SetTrue)]
@@ -133,6 +174,15 @@ pub struct Cli {
 
     #[arg(long, value_name = "N")]
     pub max_log_requests: Option<usize>,
+}
+
+/// Mirrors stern's `--container-state` choices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ContainerStateArg {
+    Running,
+    Waiting,
+    Terminated,
+    All,
 }
 
 /// Default-formatter stamp shape (stern-aligned names).
@@ -221,8 +271,21 @@ impl Cli {
         if let Some(ref z) = self.timezone {
             TimestampZone::parse_arg(z)?;
         }
+        if self.no_init_containers && self.init_containers == Some(true) {
+            return Err(
+                "`--no-init-containers` conflicts with an explicit `--init-containers=true`".into(),
+            );
+        }
+        if self.no_ephemeral_containers && self.ephemeral_containers == Some(true) {
+            return Err(
+                "`--no-ephemeral-containers` conflicts with `--ephemeral-containers=true`".into(),
+            );
+        }
         for p in &self.exclude_pod {
             Regex::new(p).map_err(|e| format!("invalid --exclude-pod regex: {e}"))?;
+        }
+        for p in &self.exclude_container {
+            Regex::new(p).map_err(|e| format!("invalid --exclude-container regex: {e}"))?;
         }
         Ok(())
     }
@@ -268,9 +331,57 @@ mod tests {
     }
 
     #[test]
+    fn init_containers_defaults_match_stern_until_flag() {
+        let cli = Cli::try_parse_from(["rstn", "q"]).unwrap();
+        assert!(cli.init_containers.is_none());
+        assert!(!cli.no_init_containers);
+        assert!(cli.ephemeral_containers.is_none());
+        assert!(!cli.no_ephemeral_containers);
+        assert!(cli.container_states.is_empty());
+    }
+
+    #[test]
     fn exclude_container_accepts_short_cap_e() {
         let cli = Cli::try_parse_from(["rstn", "-E", "sidecar", "q"]).unwrap();
-        assert_eq!(cli.exclude_container.as_deref(), Some("sidecar"));
+        assert_eq!(cli.exclude_container, vec!["sidecar".to_string()]);
+    }
+
+    #[test]
+    fn no_init_containers_sets_exclusion_semantics_on_parse() {
+        let cli = Cli::try_parse_from(["rstn", "--no-init-containers", "q"]).unwrap();
+        assert!(cli.no_init_containers);
+        cli.validate().unwrap();
+    }
+
+    #[test]
+    fn init_containers_eq_false_via_boolish_parser() {
+        let cli = Cli::try_parse_from(["rstn", "--init-containers=false", "q"]).expect("parsed");
+        assert_eq!(cli.init_containers, Some(false));
+        assert!(cli.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_conflicting_init_flags() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--no-init-containers",
+            "--init-containers=true",
+            "q",
+        ])
+        .unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_conflicting_ephemeral_flags() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--no-ephemeral-containers",
+            "--ephemeral-containers=true",
+            "q",
+        ])
+        .unwrap();
+        assert!(cli.validate().is_err());
     }
 
     #[test]

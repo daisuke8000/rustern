@@ -22,7 +22,7 @@ use super::config::{CoreRunConfig, FormatterChoice, RunError, RunOutcome, Runtim
 use super::forward::{LossyMetrics, build_log_request_semaphore, forward_to_render};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
-use crate::discovery::pod_watcher::{keys_from_pod, reconcile};
+use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod, reconcile};
 use crate::discovery::resource::{Query, label_selector_for, parse_query};
 use crate::pipeline::validate_filter;
 use crate::render::default_renderer::DefaultLineFormatter;
@@ -98,8 +98,9 @@ async fn mux_multiplex_loop(
 struct PodWatchCtx {
     context_name: ContextName,
     pod_regex: Option<Regex>,
+    container_discovery: ContainerDiscoverOpts,
     container_incl: Regex,
-    container_excl: Option<Regex>,
+    container_excl: Vec<Regex>,
     allowed_ns: Option<HashSet<String>>,
     exclude_pod: Vec<Regex>,
     mux_tx: mpsc::Sender<MuxCmd>,
@@ -168,14 +169,43 @@ fn spawn_attach_pod_log(ctx: &Arc<PodWatchCtx>, key: SourceKey, pod_token: Cance
     }));
 }
 
+fn filtered_stream_keys(pod: &Pod, ctx: &PodWatchCtx) -> Vec<SourceKey> {
+    keys_from_pod(pod, &ctx.context_name, &ctx.container_discovery)
+        .into_iter()
+        .filter(|k| ctx.container_incl.is_match(&k.container))
+        .filter(|k| !ctx.container_excl.iter().any(|r| r.is_match(&k.container)))
+        .collect()
+}
+
+/// Keys currently tracked for this Pod (`metadata.uid` disambiguates rollouts).
+fn keys_for_deleted_pod(
+    pod: &Pod,
+    ctx: &PodWatchCtx,
+    active: &HashSet<SourceKey>,
+) -> Vec<SourceKey> {
+    let ns = pod.metadata.namespace.clone().unwrap_or_default();
+    let pod_name = pod.metadata.name.clone().unwrap_or_default();
+    let uid_opt = pod.metadata.uid.as_deref();
+    active
+        .iter()
+        .filter(|k| {
+            k.context == ctx.context_name
+                && k.namespace == ns
+                && k.pod == pod_name
+                && uid_opt.map_or(true, |u| k.uid == u)
+        })
+        .cloned()
+        .collect()
+}
+
 async fn handle_watch_delete(
     pod: Pod,
     active: &mut HashSet<SourceKey>,
     tokens: &mut HashMap<SourceKey, CancellationToken>,
     mux_tx: &mpsc::Sender<MuxCmd>,
-    context_name: &ContextName,
+    ctx: &PodWatchCtx,
 ) {
-    let keys = keys_from_pod(&pod, context_name);
+    let keys = keys_for_deleted_pod(&pod, ctx, active);
     for k in keys {
         if let Some(t) = tokens.remove(&k) {
             t.cancel();
@@ -206,16 +236,7 @@ async fn handle_watch_apply(
     {
         return;
     }
-    let keys: Vec<_> = keys_from_pod(&pod, &ctx.context_name)
-        .into_iter()
-        .filter(|k| ctx.container_incl.is_match(&k.container))
-        .filter(|k| {
-            ctx.container_excl
-                .as_ref()
-                .map(|r| !r.is_match(&k.container))
-                .unwrap_or(true)
-        })
-        .collect();
+    let keys = filtered_stream_keys(&pod, ctx);
     for key in keys {
         if active.insert(key.clone()) {
             let pod_t = ctx.root_child.child_token();
@@ -243,17 +264,7 @@ fn collect_keys_snapshot(pending_pods: Vec<Pod>, ctx: &PodWatchCtx) -> HashSet<S
         {
             continue;
         }
-        for k in keys_from_pod(&pod, &ctx.context_name) {
-            if !ctx.container_incl.is_match(&k.container) {
-                continue;
-            }
-            if ctx
-                .container_excl
-                .as_ref()
-                .is_some_and(|r| r.is_match(&k.container))
-            {
-                continue;
-            }
+        for k in filtered_stream_keys(&pod, ctx) {
             snap.insert(k);
         }
     }
@@ -266,7 +277,7 @@ async fn handle_init_done(
     tokens: &mut HashMap<SourceKey, CancellationToken>,
     ctx: &Arc<PodWatchCtx>,
 ) {
-    let snap = collect_keys_snapshot(std::mem::take(pending_pods), ctx);
+    let snap = collect_keys_snapshot(std::mem::take(pending_pods), ctx.as_ref());
     let diff = reconcile(active, &snap);
     for k in diff.to_drop {
         if let Some(t) = tokens.remove(&k) {
@@ -388,10 +399,11 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let context_name = ContextName(ctx_name.to_string());
 
     let container_incl = Regex::new(&cfg.container)?;
-    let container_excl = match &cfg.exclude_container {
-        Some(p) => Some(Regex::new(p)?),
-        None => None,
-    };
+    let container_excl: Vec<Regex> = cfg
+        .exclude_container
+        .iter()
+        .map(|p| Regex::new(p))
+        .collect::<Result<_, _>>()?;
     let includes = compile_list(&cfg.include)?;
     let excludes = compile_list(&cfg.exclude)?;
 
@@ -479,6 +491,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let watch_ctx = Arc::new(PodWatchCtx {
         context_name,
         pod_regex,
+        container_discovery: cfg.container_discovery.clone(),
         container_incl,
         container_excl,
         allowed_ns,
@@ -519,7 +532,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
                                     &mut active,
                                     &mut tokens,
                                     &mux_tx_w,
-                                    &watch_ctx.context_name,
+                                    watch_ctx.as_ref(),
                                 )
                                 .await;
                             }
