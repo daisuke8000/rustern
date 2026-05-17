@@ -8,6 +8,7 @@ use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{RenderCommand, render_task};
 use rustern_core::source::pod_log::PodLogSource;
 use rustern_core::source::{ContextName, Labels, LogLevel, LogSource, SourceKind, SourceMeta};
+use rustern_core::{TimestampStyle, TimestampZone};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, duplex};
 use tokio::sync::mpsc;
@@ -66,7 +67,8 @@ async fn mock_logs_through_pipeline_and_renderer() {
     let (mut rd, wr) = duplex(4096);
     let (tx, rx) = mpsc::channel::<RenderCommand>(8);
     let fmt = Arc::new(DefaultLineFormatter {
-        show_timestamps: false,
+        timestamp_style: TimestampStyle::Omit,
+        timestamp_zone: TimestampZone::Utc,
         color_enabled: false,
     });
     let rh = tokio::spawn(async move { render_task(rx, wr, fmt).await.unwrap() });

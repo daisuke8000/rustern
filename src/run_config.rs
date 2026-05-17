@@ -5,9 +5,9 @@ use std::io::{self, IsTerminal};
 use tokio_util::sync::CancellationToken;
 
 use rustern_core::{CoreRunConfig, FormatterChoice, OutputMode, RuntimeFwdConfig};
-use rustern_core::{FilterOn, QueryMode};
+use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 
-use crate::cli::{Cli, ColorArg, FilterOnArg, FormatArg, JqModeArg, parse_since};
+use crate::cli::{Cli, ColorArg, FilterOnArg, FormatArg, JqModeArg, TimestampArg, parse_since};
 
 /// Deduped namespaces from repeatable `--namespace`/comma inputs; defaults to `[default]` when omitted.
 fn normalized_namespaces(cli: &Cli) -> Vec<String> {
@@ -38,11 +38,28 @@ impl Cli {
     pub fn core_run_config(&self, root_token: CancellationToken) -> Result<CoreRunConfig, String> {
         let since = self.since.as_deref().map(parse_since).transpose()?;
 
+        let timestamp_style = match self.timestamps {
+            TimestampArg::Off => TimestampStyle::Omit,
+            TimestampArg::Default => TimestampStyle::Rfc3339,
+            TimestampArg::Short => TimestampStyle::SternShort,
+            TimestampArg::Epoch => TimestampStyle::EpochSeconds,
+        };
+
+        let timestamp_zone = match self.timezone.as_deref() {
+            Some(z) => TimestampZone::parse_arg(z)?,
+            None => TimestampZone::Utc,
+        };
+
+        let resolved_max = self
+            .max_log_requests
+            .unwrap_or(if self.follow() { 50 } else { 5 });
+
         let output_and_formatter = match self.format {
             FormatArg::Default => (
                 OutputMode::Default,
                 FormatterChoice::Default {
-                    show_timestamps: self.timestamps,
+                    timestamp_style,
+                    timestamp_zone,
                     color_enabled: match self.color {
                         ColorArg::Never => false,
                         ColorArg::Always => true,
@@ -92,7 +109,7 @@ impl Cli {
             fwd: RuntimeFwdConfig {
                 buffer_size: self.buffer_size,
                 lossy: self.lossy,
-                max_log_requests: self.max_log_requests,
+                max_log_requests: resolved_max,
             },
             root_token,
         })
@@ -122,12 +139,21 @@ mod tests {
         assert!(matches!(
             cfg.formatter,
             FormatterChoice::Default {
-                show_timestamps: true,
+                timestamp_style: TimestampStyle::Rfc3339,
                 ..
             }
         ));
         assert_eq!(cfg.fwd.buffer_size, 4096);
-        assert_eq!(cfg.fwd.max_log_requests, 32);
+        assert_eq!(cfg.fwd.max_log_requests, 50);
+    }
+
+    #[test]
+    fn stern_aligned_default_max_when_no_follow() {
+        let cli = Cli::try_parse_from(["rstn", "--no-follow", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(!cfg.follow);
+        assert_eq!(cfg.fwd.max_log_requests, 5);
     }
 
     #[test]
