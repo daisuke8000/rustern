@@ -155,13 +155,13 @@ Without `json_query`, `jq_evaluate` is effectively optional plumbing; stage sema
 
 ### Steps
 
-1. **Setup** — `build_client`, `parse_query`, `ListParams` / `WatchConfig` (`context` / `resource`); `kind/name` queries may **`GET`** a workload (`discovery::workload_selector`) when scoped to one namespace without `-l`.
+1. **Setup** — `build_client`, `parse_query`, `ListParams` / `WatchConfig` (`context` / `resource`); `deploy/…` queries may **`GET`** a workload when scoped to one namespace without `-l`. `pod/<name>` scopes the watch via **`fieldSelector` `metadata.name=…`** merged with user field/node filters.
 2. **Watch** — Pod `Apply` / `Delete` / `Init*` via kube `watcher`.
 3. **Keys and sources** — For each `SourceKey`, open logs with `PodLogSource::start`.
 4. **Merge** — Combine streams with `StreamMap<SourceKey, _>` (mux task).
 5. **Raw channel** — Send pre-pipeline `LogEvent` through mpsc (backpressure).
 6. **Pipeline** — `ReceiverStream` → `apply_pipeline` (order above).
-7. **Renderer** — `forward_to_render` sends `RenderCommand::Line`; optional post-format `render::highlight` layer for default output (stern `-H`/`-i` emphasis); `lossy` `try_send` drops update metrics.
+7. **Renderer** — `forward_to_render` sends `RenderCommand::Line`; optional post-format `render::highlight` layer for default output (stern `-H`/`-i` emphasis); in `lossy` mode, full `try_send` drops lines while still recording drop metrics.
 8. **Output** — `render_task` writes via `LineFormatter`; `flush_ticker` triggers periodic flush.
 
 **Shutdown** — Cancel `root_token` → `Shutdown` to renderer → tear down tasks → `run` returns.

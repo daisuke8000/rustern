@@ -23,7 +23,7 @@ use super::forward::{LossyMetrics, build_log_request_semaphore, forward_to_rende
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
 use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod, reconcile};
-use crate::discovery::resource::{Query, parse_query};
+use crate::discovery::resource::{Query, ResourceKind, parse_query};
 use crate::discovery::workload_selector;
 use crate::pipeline::validate_filter;
 use crate::render::default_renderer::DefaultLineFormatter;
@@ -372,6 +372,16 @@ fn combined_field_selector(cfg: &CoreRunConfig) -> Option<String> {
     }
 }
 
+/// Exact pod name queries (`pod/<name>`) use **`fieldSelector`**, not `labelSelector`; merge with `--field-selector` / `--node`.
+fn merged_field_selector_for_pod_name(pod_name: &str, cfg: &CoreRunConfig) -> String {
+    let nm = pod_name.trim();
+    let mut parts = vec![format!("metadata.name={nm}")];
+    if let Some(rest) = combined_field_selector(cfg) {
+        parts.push(rest);
+    }
+    parts.join(",")
+}
+
 /// Main entry: watcher → `StreamMap` → pipeline → stdout.
 pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     if cfg.only_log_lines {
@@ -396,22 +406,33 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         Query::PodNameRegex(_) => None,
     };
 
+    let pod_kind_field_query =
+        cfg.selector.is_none() && matches!(kind_name.as_ref(), Some((ResourceKind::Pod, _)));
+
     let mut list = ListParams::default();
     if let Some(sel) = cfg.selector.as_ref() {
         list = list.labels(sel);
     } else if let Some((kind, name)) = &kind_name {
-        let single_ns = (!cfg.all_namespaces && cfg.namespaces.len() == 1)
-            .then_some(cfg.namespaces[0].as_str());
-        let resolved = workload_selector::resolve_label_selector_for_kind_query(
-            &client,
-            *kind,
-            name.as_str(),
-            single_ns,
-        )
-        .await?;
-        list = list.labels(&resolved);
+        match kind {
+            ResourceKind::Pod => {
+                list = list.fields(&merged_field_selector_for_pod_name(name, &cfg));
+            }
+            _ => {
+                let single_ns = (!cfg.all_namespaces && cfg.namespaces.len() == 1)
+                    .then_some(cfg.namespaces[0].as_str());
+                let resolved = workload_selector::resolve_label_selector_for_kind_query(
+                    &client,
+                    *kind,
+                    name.as_str(),
+                    single_ns,
+                )
+                .await?;
+                list = list.labels(&resolved);
+            }
+        }
     }
-    if let Some(fs) = combined_field_selector(&cfg) {
+
+    if !pod_kind_field_query && let Some(fs) = combined_field_selector(&cfg) {
         list = list.fields(&fs);
     }
 
