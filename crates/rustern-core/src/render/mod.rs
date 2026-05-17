@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::source::LogEvent;
 
 pub mod default_renderer;
+pub(crate) mod highlight;
 pub mod json_renderer;
 pub mod raw_renderer;
 

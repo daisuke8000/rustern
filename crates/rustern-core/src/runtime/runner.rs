@@ -23,9 +23,11 @@ use super::forward::{LossyMetrics, build_log_request_semaphore, forward_to_rende
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
 use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod, reconcile};
-use crate::discovery::resource::{Query, label_selector_for, parse_query};
+use crate::discovery::resource::{Query, parse_query};
+use crate::discovery::workload_selector;
 use crate::pipeline::validate_filter;
 use crate::render::default_renderer::DefaultLineFormatter;
+use crate::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
 use crate::render::json_renderer::JsonLineFormatter;
 use crate::render::raw_renderer::RawLineFormatter;
 use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
@@ -56,6 +58,21 @@ fn line_formatter(choice: &FormatterChoice) -> Arc<dyn LineFormatter> {
     }
 }
 
+fn wrap_formatter_with_stern_highlight(
+    cfg: &CoreRunConfig,
+    inner: Arc<dyn LineFormatter>,
+) -> Result<Arc<dyn LineFormatter>, RunError> {
+    let FormatterChoice::Default { .. } = &cfg.formatter else {
+        return Ok(inner);
+    };
+
+    Ok(
+        match compile_stern_highlight_regex(&cfg.include, &cfg.highlight)? {
+            Some(re) => Arc::new(SternHighlightLineFormatter::new(inner, re)),
+            None => inner,
+        },
+    )
+}
 fn source_meta_for_key(context_name: &ContextName, key: &SourceKey) -> SourceMeta {
     SourceMeta {
         context: context_name.clone(),
@@ -192,7 +209,7 @@ fn keys_for_deleted_pod(
             k.context == ctx.context_name
                 && k.namespace == ns
                 && k.pod == pod_name
-                && uid_opt.map_or(true, |u| k.uid == u)
+                && uid_opt.is_none_or(|u| k.uid == u)
         })
         .cloned()
         .collect()
@@ -357,6 +374,12 @@ fn combined_field_selector(cfg: &CoreRunConfig) -> Option<String> {
 
 /// Main entry: watcher → `StreamMap` → pipeline → stdout.
 pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
+    if cfg.only_log_lines {
+        tracing::debug!(
+            "--only-log-lines: stern hides +/- attach banners on stderr; rustern emits no stream lifecycle prefixes"
+        );
+    }
+
     let client = build_client(&cfg.context).await?;
     let query_src = if cfg.selector.is_some() && cfg.query == "." {
         ".*"
@@ -377,7 +400,16 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     if let Some(sel) = cfg.selector.as_ref() {
         list = list.labels(sel);
     } else if let Some((kind, name)) = &kind_name {
-        list = list.labels(&label_selector_for(*kind, name));
+        let single_ns = (!cfg.all_namespaces && cfg.namespaces.len() == 1)
+            .then_some(cfg.namespaces[0].as_str());
+        let resolved = workload_selector::resolve_label_selector_for_kind_query(
+            &client,
+            *kind,
+            name.as_str(),
+            single_ns,
+        )
+        .await?;
+        list = list.labels(&resolved);
     }
     if let Some(fs) = combined_field_selector(&cfg) {
         list = list.fields(&fs);
@@ -463,7 +495,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         Duration::from_millis(50),
     ));
 
-    let formatter = line_formatter(&cfg.formatter);
+    let formatter = wrap_formatter_with_stern_highlight(&cfg, line_formatter(&cfg.formatter))?;
 
     {
         let _ = &cfg.output; // reserved for future strict validation

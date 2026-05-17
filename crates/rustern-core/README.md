@@ -41,11 +41,12 @@ Index of `src/` paths and roles.
 | `source/mod.rs` | Domain types: `LogEvent`, `SourceKey`, `LogSource`, … |
 | `source/pod_log.rs` | `PodLogSource` (log API → line stream) |
 | `discovery/context.rs` | kubeconfig and `kube::Client` |
-| `discovery/resource.rs` | Query string parsing |
+| `discovery/resource.rs` | Query string parsing (`kind/name` → selectors) |
+| `discovery/workload_selector.rs` | `GET` workload → pod label selector (single-ns) |
 | `discovery/pod_watcher.rs` | Pod → `SourceKey`, `reconcile` |
 | `pipeline/*.rs` | Line-stream transforms (order fixed by `runtime`) |
 | `render/mod.rs` | `RenderCommand`, `render_task`, `flush_ticker` |
-| `render/default_renderer.rs`, … | `LineFormatter` implementations |
+| `render/default_renderer.rs`, `render/highlight.rs`, … | `LineFormatter` + stern-style emphasis |
 
 ## Architecture (layers and dependencies)
 
@@ -154,13 +155,13 @@ Without `json_query`, `jq_evaluate` is effectively optional plumbing; stage sema
 
 ### Steps
 
-1. **Setup** — `build_client`, `parse_query`, `ListParams` / `WatchConfig` (`context` / `resource`).
+1. **Setup** — `build_client`, `parse_query`, `ListParams` / `WatchConfig` (`context` / `resource`); `kind/name` queries may **`GET`** a workload (`discovery::workload_selector`) when scoped to one namespace without `-l`.
 2. **Watch** — Pod `Apply` / `Delete` / `Init*` via kube `watcher`.
 3. **Keys and sources** — For each `SourceKey`, open logs with `PodLogSource::start`.
 4. **Merge** — Combine streams with `StreamMap<SourceKey, _>` (mux task).
 5. **Raw channel** — Send pre-pipeline `LogEvent` through mpsc (backpressure).
 6. **Pipeline** — `ReceiverStream` → `apply_pipeline` (order above).
-7. **Renderer** — `forward_to_render` sends `RenderCommand::Line`; if `lossy`, failed `try_send` drops lines and updates metrics.
+7. **Renderer** — `forward_to_render` sends `RenderCommand::Line`; optional post-format `render::highlight` layer for default output (stern `-H`/`-i` emphasis); `lossy` `try_send` drops update metrics.
 8. **Output** — `render_task` writes via `LineFormatter`; `flush_ticker` triggers periodic flush.
 
 **Shutdown** — Cancel `root_token` → `Shutdown` to renderer → tear down tasks → `run` returns.
