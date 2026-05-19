@@ -25,7 +25,7 @@ use crate::discovery::context::{build_client, pick_context_name, resolve_kubecon
 use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod, reconcile};
 use crate::discovery::resource::{Query, ResourceKind, parse_query};
 use crate::discovery::workload_selector;
-use crate::pipeline::validate_filter;
+use crate::pipeline::{ColorAssignOpts, validate_filter};
 use crate::render::default_renderer::DefaultLineFormatter;
 use crate::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
 use crate::render::json_renderer::JsonLineFormatter;
@@ -42,16 +42,40 @@ enum MuxCmd {
     Remove(SourceKey),
 }
 
+fn color_assign_opts(cfg: &CoreRunConfig) -> ColorAssignOpts {
+    let FormatterChoice::Default {
+        pod_colors,
+        container_colors,
+        ..
+    } = &cfg.formatter
+    else {
+        return ColorAssignOpts {
+            pod_colors: false,
+            container_colors: false,
+            diff_container: false,
+        };
+    };
+    ColorAssignOpts {
+        pod_colors: *pod_colors,
+        container_colors: *container_colors,
+        diff_container: cfg.diff_container,
+    }
+}
+
 fn line_formatter(choice: &FormatterChoice) -> Arc<dyn LineFormatter> {
     match choice {
         FormatterChoice::Default {
             timestamp_style,
             timestamp_zone,
             color_enabled,
+            pod_colors,
+            container_colors,
         } => Arc::new(DefaultLineFormatter {
             timestamp_style: *timestamp_style,
             timestamp_zone: *timestamp_zone,
             color_enabled: *color_enabled,
+            pod_colors: *pod_colors,
+            container_colors: *container_colors,
         }),
         FormatterChoice::Json => Arc::new(JsonLineFormatter),
         FormatterChoice::Raw => Arc::new(RawLineFormatter),
@@ -534,6 +558,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
             filter_on: cfg.filter_on,
             jq: jq.clone(),
             level_key: cfg.level_key.clone(),
+            color_assign: color_assign_opts(&cfg),
         },
         render_tx.clone(),
         cfg.fwd.clone(),

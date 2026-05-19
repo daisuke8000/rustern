@@ -4,8 +4,8 @@ use futures::stream::{BoxStream, Stream};
 use regex::Regex;
 
 use crate::pipeline::{
-    CompiledFilter, FilterOn, QueryMode, color_assign, container_filter, include_exclude,
-    jq_evaluate, json_annotate, level_classify,
+    ColorAssignOpts, CompiledFilter, FilterOn, QueryMode, color_assign, container_filter,
+    include_exclude, jq_evaluate, json_annotate, level_classify,
 };
 use crate::source::{LogEvent, LogSourceError};
 
@@ -21,6 +21,7 @@ pub(super) struct PipelineStages {
     pub filter_on: FilterOn,
     pub jq: Option<(CompiledFilter, QueryMode)>,
     pub level_key: Option<String>,
+    pub color_assign: ColorAssignOpts,
 }
 
 pub(super) fn apply_pipeline<S>(
@@ -38,6 +39,7 @@ where
         filter_on,
         jq,
         level_key,
+        color_assign: color_opts,
     } = stages;
 
     let s: BoxStream<'static, Result<LogEvent, LogSourceError>> = if filter_on == FilterOn::Original
@@ -67,5 +69,5 @@ where
             s
         };
 
-    Box::pin(color_assign(s))
+    Box::pin(color_assign(s, color_opts))
 }

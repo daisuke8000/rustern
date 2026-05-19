@@ -52,6 +52,24 @@ fn resolved_ephemeral_include(cli: &Cli) -> bool {
     }
 }
 
+fn resolved_pod_colors(cli: &Cli) -> bool {
+    if cli.no_pod_colors {
+        false
+    } else {
+        cli.pod_colors.unwrap_or(true)
+    }
+}
+
+fn resolved_container_colors(cli: &Cli) -> bool {
+    if cli.no_container_colors {
+        false
+    } else if let Some(v) = cli.container_colors {
+        v
+    } else {
+        resolved_pod_colors(cli)
+    }
+}
+
 fn resolved_container_state_policy(states: &[ContainerStateArg]) -> ContainerStatePolicy {
     use ContainerStateArg as A;
     if states.is_empty() {
@@ -113,6 +131,8 @@ impl Cli {
                         ColorArg::Always => true,
                         ColorArg::Auto => io::stdout().is_terminal(),
                     },
+                    pod_colors: resolved_pod_colors(self),
+                    container_colors: resolved_container_colors(self),
                 },
             ),
             FormatArg::Json => (OutputMode::Json, FormatterChoice::Json),
@@ -161,6 +181,7 @@ impl Cli {
             level_key: self.level_key.clone(),
             output: output_and_formatter.0,
             formatter: output_and_formatter.1,
+            diff_container: self.diff_container,
             fwd: RuntimeFwdConfig {
                 buffer_size: self.buffer_size,
                 lossy: self.lossy,
@@ -437,6 +458,50 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn maps_pod_and_container_color_flags() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--no-pod-colors",
+            "--container-colors",
+            "--diff-container",
+            "q",
+        ])
+        .unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                pod_colors: false,
+                container_colors: true,
+                ..
+            }
+        ));
+        assert!(cfg.diff_container);
+    }
+
+    #[test]
+    fn maps_no_container_colors() {
+        let cli = Cli::try_parse_from(["rstn", "--no-container-colors", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                container_colors: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_conflicting_pod_color_flags() {
+        let cli =
+            Cli::try_parse_from(["rstn", "--no-pod-colors", "--pod-colors=true", "q"]).unwrap();
+        assert!(cli.validate().is_err());
     }
 
     #[test]

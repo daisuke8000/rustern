@@ -56,6 +56,7 @@ mod tests {
             structured: None,
             level: Some(LogLevel::Error),
             palette_index: None,
+            container_palette_index: None,
         };
         let f = JsonLineFormatter;
         let s = f.format_line(&ev);

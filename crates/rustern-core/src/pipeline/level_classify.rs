@@ -81,6 +81,7 @@ mod tests {
             structured: Some(RawValue::from_string(raw.to_string()).unwrap()),
             level: None,
             palette_index: None,
+            container_palette_index: None,
         };
         let s = futures::stream::iter(vec![Ok(ev)]);
         let out: Vec<_> = level_classify(s, Some("level".into())).collect().await;

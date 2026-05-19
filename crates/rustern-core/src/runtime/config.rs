@@ -37,6 +37,8 @@ pub enum FormatterChoice {
         timestamp_style: TimestampStyle,
         timestamp_zone: TimestampZone,
         color_enabled: bool,
+        pod_colors: bool,
+        container_colors: bool,
     },
     /// NDJSON emitter.
     Json,
@@ -95,6 +97,8 @@ pub struct CoreRunConfig {
     pub output: OutputMode,
     /// Concrete formatter knobs.
     pub formatter: FormatterChoice,
+    /// Per-container palette when true (stern `--diff-container` / `-d`).
+    pub diff_container: bool,
     /// Forwarding knobs (buffer sizing, concurrency).
     pub fwd: RuntimeFwdConfig,
     /// Cooperative shutdown for all spawned tasks.

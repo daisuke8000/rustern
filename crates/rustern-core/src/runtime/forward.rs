@@ -119,6 +119,7 @@ mod tests {
                 structured: None,
                 level: None,
                 palette_index: None,
+                container_palette_index: None,
             }
         }
         let v: Vec<_> = (0..50).map(|_| Ok(sample_ev())).collect();
@@ -170,6 +171,7 @@ mod tests {
                 structured: None,
                 level: None,
                 palette_index: None,
+                container_palette_index: None,
             }
         }
         let v: Vec<_> = (0..32).map(|_| Ok(sample_ev())).collect();

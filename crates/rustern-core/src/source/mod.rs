@@ -63,7 +63,10 @@ pub struct LogEvent {
     pub message: Arc<str>,
     pub structured: Option<Box<RawValue>>,
     pub level: Option<LogLevel>,
+    /// Stable palette slot for pod-name highlighting.
     pub palette_index: Option<u8>,
+    /// Stable palette slot for container-name highlighting (`diff-container` uses container name).
+    pub container_palette_index: Option<u8>,
 }
 
 #[derive(Debug, thiserror::Error)]

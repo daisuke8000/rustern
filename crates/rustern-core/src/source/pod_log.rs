@@ -48,6 +48,7 @@ impl PodLogSource {
             structured: None,
             level: None,
             palette_index: None,
+            container_palette_index: None,
         };
         let s: Pin<Box<dyn futures::Stream<Item = Result<LogEvent, LogSourceError>> + Send>> =
             Box::pin(futures::stream::iter(vec![Ok(event)]));
@@ -94,6 +95,7 @@ impl PodLogSource {
                                 structured: None,
                                 level: None,
                                 palette_index: None,
+                                container_palette_index: None,
                             };
                             Some((Ok(ev), (lines, meta, token)))
                         }

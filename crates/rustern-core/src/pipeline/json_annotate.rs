@@ -43,6 +43,7 @@ mod tests {
             structured: None,
             level: None,
             palette_index: None,
+            container_palette_index: None,
         }
     }
 
