@@ -136,6 +136,28 @@ impl Cli {
                 },
             ),
             FormatArg::Json => (OutputMode::Json, FormatterChoice::Json),
+            FormatArg::ExtJson => (
+                OutputMode::ExtJson,
+                FormatterChoice::ExtJson {
+                    color_enabled: match self.color {
+                        ColorArg::Never => false,
+                        ColorArg::Always => true,
+                        ColorArg::Auto => io::stdout().is_terminal(),
+                    },
+                    all_namespaces: self.all_namespaces,
+                },
+            ),
+            FormatArg::PpExtJson => (
+                OutputMode::PpExtJson,
+                FormatterChoice::PpExtJson {
+                    color_enabled: match self.color {
+                        ColorArg::Never => false,
+                        ColorArg::Always => true,
+                        ColorArg::Auto => io::stdout().is_terminal(),
+                    },
+                    all_namespaces: self.all_namespaces,
+                },
+            ),
             FormatArg::Raw => (OutputMode::Raw, FormatterChoice::Raw),
         };
 
