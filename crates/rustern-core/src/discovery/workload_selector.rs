@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{PodTemplateSpec, ReplicationController, Service};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
 use kube::Client;
 use kube::api::Api;
 
@@ -27,46 +27,82 @@ pub fn btree_to_label_selector(m: &BTreeMap<String, String>) -> String {
         .join(",")
 }
 
-fn fallback_app_keys(kind: ResourceKind, workload_name: &str) -> BTreeMap<String, String> {
-    let mut m = BTreeMap::new();
-    m.insert("app".to_string(), workload_name.to_string());
+fn fallback_app_selector(kind: ResourceKind, workload_name: &str) -> String {
     tracing::warn!(
         workload = workload_name,
         ?kind,
         "could not derive pod label selector from API object; falling back to app=<name>"
     );
-    m
+    format!("app={workload_name}")
 }
 
-fn pairs_from_meta_selector(
+fn match_expression_fragment(req: &LabelSelectorRequirement) -> Option<String> {
+    let key = req.key.as_str();
+    match req.operator.as_str() {
+        "In" | "NotIn" => {
+            let values = req.values.as_ref().filter(|v| !v.is_empty())?;
+            let mut sorted: Vec<&str> = values.iter().map(String::as_str).collect();
+            sorted.sort_unstable();
+            let op = if req.operator == "In" { "in" } else { "notin" };
+            Some(format!("{key} {op} ({})", sorted.join(",")))
+        }
+        "Exists" => Some(key.to_string()),
+        "DoesNotExist" => Some(format!("!{key}")),
+        other => {
+            tracing::warn!(
+                key,
+                operator = other,
+                "unsupported matchExpression operator; skipping"
+            );
+            None
+        }
+    }
+}
+
+fn label_selector_from_meta(
     ls: &LabelSelector,
     template: Option<&PodTemplateSpec>,
     kind: ResourceKind,
     workload_name: &str,
-) -> BTreeMap<String, String> {
-    if ls.match_expressions.as_ref().is_some_and(|e| !e.is_empty()) {
-        tracing::warn!(
-            workload = workload_name,
-            ?kind,
-            "selector includes matchExpressions; using matchLabels/template labels only — verify this matches kubectl watch scope"
-        );
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(labels) = &ls.match_labels {
+        for (k, v) in labels {
+            parts.push(format!("{k}={v}"));
+        }
     }
 
-    let mut m = ls.match_labels.clone().unwrap_or_default();
+    if let Some(exprs) = &ls.match_expressions {
+        for req in exprs {
+            if let Some(fragment) = match_expression_fragment(req) {
+                parts.push(fragment);
+            }
+        }
+    }
 
-    if m.is_empty()
+    let no_match_labels = ls.match_labels.as_ref().is_none_or(BTreeMap::is_empty);
+    let no_match_expressions = ls
+        .match_expressions
+        .as_ref()
+        .is_none_or(|exprs| exprs.is_empty());
+    if no_match_labels
+        && no_match_expressions
         && let Some(labs) = template
             .and_then(|t| t.metadata.as_ref())
             .and_then(|md| md.labels.as_ref())
     {
-        m.clone_from(labs);
+        for (k, v) in labs {
+            parts.push(format!("{k}={v}"));
+        }
     }
 
-    if m.is_empty() {
-        return fallback_app_keys(kind, workload_name);
+    if parts.is_empty() {
+        return fallback_app_selector(kind, workload_name);
     }
 
-    m
+    parts.sort();
+    parts.join(",")
 }
 
 fn string_from_ls(
@@ -75,7 +111,7 @@ fn string_from_ls(
     kind: ResourceKind,
     workload_name: &str,
 ) -> String {
-    btree_to_label_selector(&pairs_from_meta_selector(ls, template, kind, workload_name))
+    label_selector_from_meta(ls, template, kind, workload_name)
 }
 
 async fn deployment_selector(
@@ -276,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn match_labels_used_when_expression_also_present() {
+    fn match_labels_and_expressions_anded() {
         let ls = LabelSelector {
             match_expressions: Some(vec![LabelSelectorRequirement {
                 key: "role".into(),
@@ -286,8 +322,38 @@ mod tests {
             match_labels: Some(BTreeMap::from([("tier".into(), "web".into())])),
             ..Default::default()
         };
-        let m = pairs_from_meta_selector(&ls, None, ResourceKind::Deployment, "api");
-        assert_eq!(m.get("tier").map(String::as_str), Some("web"));
+        assert_eq!(
+            label_selector_from_meta(&ls, None, ResourceKind::Deployment, "api"),
+            "role in (x),tier=web"
+        );
+    }
+
+    #[test]
+    fn match_expression_operators() {
+        let ls = LabelSelector {
+            match_expressions: Some(vec![
+                LabelSelectorRequirement {
+                    key: "env".into(),
+                    operator: "NotIn".into(),
+                    values: Some(vec!["dev".into(), "qa".into()]),
+                },
+                LabelSelectorRequirement {
+                    key: "sidecar".into(),
+                    operator: "Exists".into(),
+                    values: None,
+                },
+                LabelSelectorRequirement {
+                    key: "legacy".into(),
+                    operator: "DoesNotExist".into(),
+                    values: None,
+                },
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(
+            label_selector_from_meta(&ls, None, ResourceKind::Deployment, "api"),
+            "!legacy,env notin (dev,qa),sidecar"
+        );
     }
 
     #[test]
@@ -303,10 +369,32 @@ mod tests {
             spec: None,
         };
         let ls = LabelSelector::default();
-        let m = pairs_from_meta_selector(&ls, Some(&tpl_with), ResourceKind::Deployment, "api");
         assert_eq!(
-            m.get("app.kubernetes.io/name").map(String::as_str),
-            Some("payments")
+            label_selector_from_meta(&ls, Some(&tpl_with), ResourceKind::Deployment, "api"),
+            "app.kubernetes.io/name=payments"
+        );
+    }
+
+    #[test]
+    fn expressions_only_ignores_template_labels() {
+        let tpl_with = PodTemplateSpec {
+            metadata: Some(ObjectMeta {
+                labels: Some(BTreeMap::from([("app".into(), "shop".into())])),
+                ..Default::default()
+            }),
+            spec: None,
+        };
+        let ls = LabelSelector {
+            match_expressions: Some(vec![LabelSelectorRequirement {
+                key: "tier".into(),
+                operator: "In".into(),
+                values: Some(vec!["prod".into()]),
+            }]),
+            ..Default::default()
+        };
+        assert_eq!(
+            label_selector_from_meta(&ls, Some(&tpl_with), ResourceKind::Deployment, "api"),
+            "tier in (prod)"
         );
     }
 }
