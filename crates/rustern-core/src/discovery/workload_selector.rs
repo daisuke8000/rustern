@@ -81,7 +81,13 @@ fn label_selector_from_meta(
         }
     }
 
-    if ls.match_labels.as_ref().is_none_or(BTreeMap::is_empty)
+    let no_match_labels = ls.match_labels.as_ref().is_none_or(BTreeMap::is_empty);
+    let no_match_expressions = ls
+        .match_expressions
+        .as_ref()
+        .is_none_or(|exprs| exprs.is_empty());
+    if no_match_labels
+        && no_match_expressions
         && let Some(labs) = template
             .and_then(|t| t.metadata.as_ref())
             .and_then(|md| md.labels.as_ref())
@@ -370,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn expressions_with_empty_match_labels_use_template() {
+    fn expressions_only_ignores_template_labels() {
         let tpl_with = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(BTreeMap::from([("app".into(), "shop".into())])),
@@ -388,7 +394,7 @@ mod tests {
         };
         assert_eq!(
             label_selector_from_meta(&ls, Some(&tpl_with), ResourceKind::Deployment, "api"),
-            "app=shop,tier in (prod)"
+            "tier in (prod)"
         );
     }
 }
