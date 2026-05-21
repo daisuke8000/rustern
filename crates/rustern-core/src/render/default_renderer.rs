@@ -55,9 +55,7 @@ fn format_wall_prefix(
 }
 
 fn push_colored(slice: &mut String, text: &str, idx: Option<u8>, color_enabled: bool) {
-    if color_enabled
-        && let Some(idx) = idx
-    {
+    if color_enabled && let Some(idx) = idx {
         let (r, g, b) = PALETTE[(idx as usize) % PALETTE.len()];
         use owo_colors::OwoColorize;
         use std::fmt::Write as _;

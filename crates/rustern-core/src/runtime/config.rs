@@ -47,13 +47,9 @@ pub enum FormatterChoice {
     /// NDJSON emitter.
     Json,
     /// Stern-compatible extended JSON.
-    ExtJson {
-        all_namespaces: bool,
-    },
+    ExtJson { all_namespaces: bool },
     /// Pretty extended JSON.
-    PpExtJson {
-        all_namespaces: bool,
-    },
+    PpExtJson { all_namespaces: bool },
     /// Transparent passthrough (`message` only).
     Raw,
 }

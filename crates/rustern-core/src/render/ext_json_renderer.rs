@@ -149,6 +149,9 @@ mod tests {
         let s = f.format_line(&sample_event("x"));
         let v: Value = serde_json::from_str(s.trim()).unwrap();
         let pod = v["pod"].as_str().unwrap();
-        assert!(!pod.contains('\u{1b}'), "extjson must not embed ANSI in JSON values");
+        assert!(
+            !pod.contains('\u{1b}'),
+            "extjson must not embed ANSI in JSON values"
+        );
     }
 }
