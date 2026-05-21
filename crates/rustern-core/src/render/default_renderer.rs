@@ -59,7 +59,8 @@ fn push_colored(slice: &mut String, text: &str, idx: Option<u8>, color_enabled: 
         if let Some(idx) = idx {
             let (r, g, b) = PALETTE[(idx as usize) % PALETTE.len()];
             use owo_colors::OwoColorize;
-            slice.push_str(&format!("{}", text.truecolor(r, g, b)));
+            use std::fmt::Write as _;
+            let _ = write!(slice, "{}", text.truecolor(r, g, b));
             return;
         }
     }
@@ -169,10 +170,21 @@ mod tests {
         let f = DefaultLineFormatter {
             pod_colors: true,
             container_colors: false,
-            ..formatter(false)
+            ..formatter(true)
         };
         let out = f.format_line(&e);
-        assert_eq!(out, "p/ctn | hello\n");
+        let slash = out.find('/').expect("pod/container separator");
+        let container_part = &out[slash + 1..];
+        let container_end = container_part.find(" | ").expect("message separator");
+        assert!(
+            out[..slash].contains('\x1b'),
+            "pod segment should be colored"
+        );
+        assert!(
+            !container_part[..container_end].contains('\x1b'),
+            "container segment should be plain"
+        );
+        assert!(out.contains("hello"));
     }
 
     #[tokio::test]
