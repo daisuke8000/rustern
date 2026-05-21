@@ -271,6 +271,8 @@ pub enum FormatArg {
     #[default]
     Default,
     Json,
+    ExtJson,
+    PpExtJson,
     Raw,
 }
 

@@ -136,6 +136,18 @@ impl Cli {
                 },
             ),
             FormatArg::Json => (OutputMode::Json, FormatterChoice::Json),
+            FormatArg::ExtJson => (
+                OutputMode::ExtJson,
+                FormatterChoice::ExtJson {
+                    all_namespaces: self.all_namespaces,
+                },
+            ),
+            FormatArg::PpExtJson => (
+                OutputMode::PpExtJson,
+                FormatterChoice::PpExtJson {
+                    all_namespaces: self.all_namespaces,
+                },
+            ),
             FormatArg::Raw => (OutputMode::Raw, FormatterChoice::Raw),
         };
 

@@ -27,6 +27,7 @@ use crate::discovery::resource::{Query, ResourceKind, parse_query};
 use crate::discovery::workload_selector;
 use crate::pipeline::{ColorAssignOpts, validate_filter};
 use crate::render::default_renderer::DefaultLineFormatter;
+use crate::render::ext_json_renderer::ExtJsonLineFormatter;
 use crate::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
 use crate::render::json_renderer::JsonLineFormatter;
 use crate::render::raw_renderer::RawLineFormatter;
@@ -78,6 +79,14 @@ fn line_formatter(choice: &FormatterChoice) -> Arc<dyn LineFormatter> {
             container_colors: *container_colors,
         }),
         FormatterChoice::Json => Arc::new(JsonLineFormatter),
+        FormatterChoice::ExtJson { all_namespaces } => Arc::new(ExtJsonLineFormatter {
+            all_namespaces: *all_namespaces,
+            pretty: false,
+        }),
+        FormatterChoice::PpExtJson { all_namespaces } => Arc::new(ExtJsonLineFormatter {
+            all_namespaces: *all_namespaces,
+            pretty: true,
+        }),
         FormatterChoice::Raw => Arc::new(RawLineFormatter),
     }
 }
