@@ -18,7 +18,7 @@ pub struct JsonLineFormatter;
 
 impl LineFormatter for JsonLineFormatter {
     fn format_line(&self, event: &LogEvent) -> String {
-        let level = event.level.as_ref().map(|l| format!("{l:?}"));
+        let level = event.level.as_ref().map(|l| l.as_str().to_string());
         let row = JsonLine {
             pod: &event.source.pod,
             container: &event.source.container,
@@ -66,7 +66,7 @@ mod tests {
         assert_eq!(v["namespace"], "ns");
         assert_eq!(v["message"], "hi");
         assert!(v.get("timestamp").is_some());
-        assert!(v.get("level").is_some());
+        assert_eq!(v["level"], "error");
         assert!(s.ends_with('\n'));
     }
 }

@@ -79,19 +79,11 @@ fn line_formatter(choice: &FormatterChoice) -> Arc<dyn LineFormatter> {
             container_colors: *container_colors,
         }),
         FormatterChoice::Json => Arc::new(JsonLineFormatter),
-        FormatterChoice::ExtJson {
-            color_enabled,
-            all_namespaces,
-        } => Arc::new(ExtJsonLineFormatter {
-            color_enabled: *color_enabled,
+        FormatterChoice::ExtJson { all_namespaces } => Arc::new(ExtJsonLineFormatter {
             all_namespaces: *all_namespaces,
             pretty: false,
         }),
-        FormatterChoice::PpExtJson {
-            color_enabled,
-            all_namespaces,
-        } => Arc::new(ExtJsonLineFormatter {
-            color_enabled: *color_enabled,
+        FormatterChoice::PpExtJson { all_namespaces } => Arc::new(ExtJsonLineFormatter {
             all_namespaces: *all_namespaces,
             pretty: true,
         }),

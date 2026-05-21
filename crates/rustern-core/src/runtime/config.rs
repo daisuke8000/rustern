@@ -27,7 +27,7 @@ pub enum OutputMode {
     Raw,
     /// One JSON object per log line (`message` rewritten when jq is enabled).
     Json,
-    /// Stern-compatible extended JSON (colorized pod/container when enabled).
+    /// Stern-compatible extended JSON (plain metadata fields).
     ExtJson,
     /// Pretty-printed [`OutputMode::ExtJson`].
     PpExtJson,
@@ -48,12 +48,10 @@ pub enum FormatterChoice {
     Json,
     /// Stern-compatible extended JSON.
     ExtJson {
-        color_enabled: bool,
         all_namespaces: bool,
     },
     /// Pretty extended JSON.
     PpExtJson {
-        color_enabled: bool,
         all_namespaces: bool,
     },
     /// Transparent passthrough (`message` only).

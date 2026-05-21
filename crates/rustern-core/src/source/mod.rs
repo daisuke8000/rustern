@@ -33,6 +33,19 @@ pub enum LogLevel {
     Other(String),
 }
 
+impl LogLevel {
+    pub fn as_str(&self) -> &str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+            LogLevel::Other(s) => s.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SourceMeta {
     pub context: ContextName,
