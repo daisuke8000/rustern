@@ -34,6 +34,7 @@ mod tests {
             structured: None,
             level: None,
             palette_index: None,
+            container_palette_index: None,
         };
         assert_eq!(RawLineFormatter.format_line(&ev), "plain\n");
     }

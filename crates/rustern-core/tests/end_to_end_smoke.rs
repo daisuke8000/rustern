@@ -3,7 +3,9 @@
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};
 use regex::Regex;
-use rustern_core::pipeline::{color_assign, container_filter, json_annotate, level_classify};
+use rustern_core::pipeline::{
+    ColorAssignOpts, color_assign, container_filter, json_annotate, level_classify,
+};
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{RenderCommand, render_task};
 use rustern_core::source::pod_log::PodLogSource;
@@ -52,7 +54,14 @@ async fn mock_logs_through_pipeline_and_renderer() {
     let stream = container_filter(stream, Regex::new("app").unwrap(), Vec::new());
     let stream = json_annotate(stream);
     let stream = level_classify(stream, Some("level".into()));
-    let stream = color_assign(stream);
+    let stream = color_assign(
+        stream,
+        ColorAssignOpts {
+            pod_colors: true,
+            container_colors: true,
+            diff_container: false,
+        },
+    );
     let events: Vec<_> = stream.collect().await;
     server.await.unwrap();
 
@@ -70,6 +79,8 @@ async fn mock_logs_through_pipeline_and_renderer() {
         timestamp_style: TimestampStyle::Omit,
         timestamp_zone: TimestampZone::Utc,
         color_enabled: false,
+        pod_colors: true,
+        container_colors: true,
     });
     let rh = tokio::spawn(async move { render_task(rx, wr, fmt).await.unwrap() });
 

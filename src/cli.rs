@@ -172,6 +172,36 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
     pub color: ColorArg,
 
+    /// Highlight pod names in the default formatter (stern `--pod-colors`; default on)
+    #[arg(
+        long = "pod-colors",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        require_equals = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub pod_colors: Option<bool>,
+
+    #[arg(long = "no-pod-colors", action = clap::ArgAction::SetTrue)]
+    pub no_pod_colors: bool,
+
+    /// Highlight container names (defaults to same enablement as `--pod-colors`)
+    #[arg(
+        long = "container-colors",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        require_equals = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub container_colors: Option<bool>,
+
+    #[arg(long = "no-container-colors", action = clap::ArgAction::SetTrue)]
+    pub no_container_colors: bool,
+
+    /// Use a distinct palette slot per container (`stern` `-d` / `--diff-container`)
+    #[arg(short = 'd', long = "diff-container", action = clap::ArgAction::SetTrue)]
+    pub diff_container: bool,
+
     /// Pipeline→renderer channel size
     #[arg(long, default_value_t = 4096)]
     pub buffer_size: usize,
@@ -287,6 +317,15 @@ impl Cli {
         if self.no_ephemeral_containers && self.ephemeral_containers == Some(true) {
             return Err(
                 "`--no-ephemeral-containers` conflicts with `--ephemeral-containers=true`".into(),
+            );
+        }
+        if self.no_pod_colors && self.pod_colors == Some(true) {
+            return Err("`--no-pod-colors` conflicts with an explicit `--pod-colors=true`".into());
+        }
+        if self.no_container_colors && self.container_colors == Some(true) {
+            return Err(
+                "`--no-container-colors` conflicts with an explicit `--container-colors=true`"
+                    .into(),
             );
         }
         for p in &self.exclude_pod {

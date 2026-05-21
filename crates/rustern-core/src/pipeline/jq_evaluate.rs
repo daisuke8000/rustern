@@ -155,6 +155,7 @@ mod tests {
             structured: Some(RawValue::from_string(raw.to_string()).unwrap()),
             level: None,
             palette_index: None,
+            container_palette_index: None,
         }
     }
 
