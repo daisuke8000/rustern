@@ -45,7 +45,10 @@ fn normalize_condition_status(value: &str) -> Result<String, ParsePodConditionEr
 }
 
 pub fn pod_matches_condition(pod: &Pod, filter: &PodConditionFilter) -> bool {
-    let Some(conditions) = pod.status.as_ref().and_then(|s| s.conditions.as_ref()) else {
+    let Some(status) = pod.status.as_ref() else {
+        return false;
+    };
+    let Some(conditions) = status.conditions.as_ref() else {
         return missing_condition_matches(filter);
     };
 
@@ -58,6 +61,8 @@ pub fn pod_matches_condition(pod: &Pod, filter: &PodConditionFilter) -> bool {
     missing_condition_matches(filter)
 }
 
+/// Stern-compatible heuristic: pods without a `Ready` condition (e.g. completed Jobs)
+/// match `ready=false`; other missing condition types do not.
 fn missing_condition_matches(filter: &PodConditionFilter) -> bool {
     filter.type_name == "ready" && filter.status.eq_ignore_ascii_case("False")
 }
@@ -82,6 +87,36 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    #[test]
+    fn parse_empty_string_returns_error() {
+        assert_eq!(parse_pod_condition(""), Err(ParsePodConditionError::Empty));
+        assert_eq!(
+            parse_pod_condition("   "),
+            Err(ParsePodConditionError::Empty)
+        );
+        assert_eq!(
+            parse_pod_condition("=true"),
+            Err(ParsePodConditionError::Empty)
+        );
+    }
+
+    #[test]
+    fn parse_invalid_value_returns_error() {
+        let err = parse_pod_condition("ready=maybe").unwrap_err();
+        assert!(matches!(err, ParsePodConditionError::InvalidValue(_)));
+    }
+
+    #[test]
+    fn ready_false_does_not_match_pod_without_status() {
+        let pod = Pod {
+            metadata: ObjectMeta::default(),
+            spec: None,
+            status: None,
+        };
+        let f = parse_pod_condition("ready=false").unwrap();
+        assert!(!pod_matches_condition(&pod, &f));
     }
 
     #[test]

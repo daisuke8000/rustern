@@ -121,7 +121,7 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub tail: Option<i64>,
 
-    /// Filter pods by status condition (`ready=false`, etc.; only with `--no-follow` or `--tail=0`)
+    /// Filter pods by status condition (`ready=false`, etc.; requires `--no-follow` or `--tail=0`)
     #[arg(long = "condition", value_name = "NAME[=VALUE]")]
     pub condition: Option<String>,
 
