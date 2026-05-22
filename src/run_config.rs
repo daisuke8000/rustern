@@ -5,6 +5,7 @@ use std::io::{self, IsTerminal};
 
 use tokio_util::sync::CancellationToken;
 
+use rustern_core::discovery::pod_condition::parse_pod_condition;
 use rustern_core::discovery::pod_watcher::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
@@ -173,6 +174,12 @@ impl Cli {
                 include_ephemeral_containers: resolved_ephemeral_include(self),
                 state_policy: resolved_container_state_policy(&self.container_states),
             },
+            pod_condition: self
+                .condition
+                .as_deref()
+                .map(parse_pod_condition)
+                .transpose()
+                .map_err(|e| e.to_string())?,
             follow: self.follow(),
             tail: self.tail,
             since,
@@ -532,5 +539,22 @@ mod tests {
         assert_eq!(cfg.highlight, vec!["panic".to_string()]);
         assert!(cfg.only_log_lines);
         assert!(cfg.include.is_empty());
+    }
+
+    #[test]
+    fn maps_condition_with_no_follow() {
+        let cli =
+            Cli::try_parse_from(["rstn", "--no-follow", "--condition=ready=false", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        let cond = cfg.pod_condition.as_ref().unwrap();
+        assert_eq!(cond.type_name, "ready");
+        assert_eq!(cond.status, "False");
+    }
+
+    #[test]
+    fn rejects_condition_with_follow_without_tail_zero() {
+        let cli = Cli::try_parse_from(["rstn", "-f", "--condition=ready", "q"]).unwrap();
+        assert!(cli.validate().is_err());
     }
 }

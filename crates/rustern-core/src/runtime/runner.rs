@@ -22,6 +22,7 @@ use super::config::{CoreRunConfig, FormatterChoice, RunError, RunOutcome, Runtim
 use super::forward::{LossyMetrics, build_log_request_semaphore, forward_to_render};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
+use crate::discovery::pod_condition::{PodConditionFilter, pod_matches_condition};
 use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod, reconcile};
 use crate::discovery::resource::{Query, ResourceKind, parse_query};
 use crate::discovery::workload_selector;
@@ -148,6 +149,7 @@ async fn mux_multiplex_loop(
 struct PodWatchCtx {
     context_name: ContextName,
     pod_regex: Option<Regex>,
+    pod_condition: Option<PodConditionFilter>,
     container_discovery: ContainerDiscoverOpts,
     container_incl: Regex,
     container_excl: Vec<Regex>,
@@ -248,14 +250,14 @@ fn keys_for_deleted_pod(
         .collect()
 }
 
-async fn handle_watch_delete(
-    pod: Pod,
+async fn drop_pod_streams(
+    pod: &Pod,
     active: &mut HashSet<SourceKey>,
     tokens: &mut HashMap<SourceKey, CancellationToken>,
     mux_tx: &mpsc::Sender<MuxCmd>,
     ctx: &PodWatchCtx,
 ) {
-    let keys = keys_for_deleted_pod(&pod, ctx, active);
+    let keys = keys_for_deleted_pod(pod, ctx, active);
     for k in keys {
         if let Some(t) = tokens.remove(&k) {
             t.cancel();
@@ -265,25 +267,48 @@ async fn handle_watch_delete(
     }
 }
 
+async fn handle_watch_delete(
+    pod: Pod,
+    active: &mut HashSet<SourceKey>,
+    tokens: &mut HashMap<SourceKey, CancellationToken>,
+    mux_tx: &mpsc::Sender<MuxCmd>,
+    ctx: &PodWatchCtx,
+) {
+    drop_pod_streams(&pod, active, tokens, mux_tx, ctx).await;
+}
+
+fn pod_passes_watch_filters(pod: &Pod, ctx: &PodWatchCtx) -> bool {
+    let name = pod.metadata.name.as_deref().unwrap_or("");
+    if let Some(allowed) = &ctx.allowed_ns {
+        let ns = pod.metadata.namespace.as_deref().unwrap_or("");
+        if !allowed.contains(ns) {
+            return false;
+        }
+    }
+    if ctx.exclude_pod.iter().any(|re| re.is_match(name)) {
+        return false;
+    }
+    if let Some(re) = &ctx.pod_regex
+        && !re.is_match(name)
+    {
+        return false;
+    }
+    if let Some(cond) = &ctx.pod_condition
+        && !pod_matches_condition(pod, cond)
+    {
+        return false;
+    }
+    true
+}
+
 async fn handle_watch_apply(
     pod: Pod,
     active: &mut HashSet<SourceKey>,
     tokens: &mut HashMap<SourceKey, CancellationToken>,
     ctx: &Arc<PodWatchCtx>,
 ) {
-    let name = pod.metadata.name.clone().unwrap_or_default();
-    if let Some(allowed) = &ctx.allowed_ns {
-        let ns = pod.metadata.namespace.as_deref().unwrap_or("");
-        if !allowed.contains(ns) {
-            return;
-        }
-    }
-    if ctx.exclude_pod.iter().any(|re| re.is_match(&name)) {
-        return;
-    }
-    if let Some(re) = &ctx.pod_regex
-        && !re.is_match(&name)
-    {
+    if !pod_passes_watch_filters(&pod, ctx) {
+        drop_pod_streams(&pod, active, tokens, &ctx.mux_tx, ctx).await;
         return;
     }
     let keys = filtered_stream_keys(&pod, ctx);
@@ -299,19 +324,7 @@ async fn handle_watch_apply(
 fn collect_keys_snapshot(pending_pods: Vec<Pod>, ctx: &PodWatchCtx) -> HashSet<SourceKey> {
     let mut snap: HashSet<SourceKey> = HashSet::new();
     for pod in pending_pods {
-        let name = pod.metadata.name.clone().unwrap_or_default();
-        if let Some(allowed) = &ctx.allowed_ns {
-            let ns = pod.metadata.namespace.as_deref().unwrap_or("");
-            if !allowed.contains(ns) {
-                continue;
-            }
-        }
-        if ctx.exclude_pod.iter().any(|re| re.is_match(&name)) {
-            continue;
-        }
-        if let Some(re) = &ctx.pod_regex
-            && !re.is_match(&name)
-        {
+        if !pod_passes_watch_filters(&pod, ctx) {
             continue;
         }
         for k in filtered_stream_keys(&pod, ctx) {
@@ -578,6 +591,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let watch_ctx = Arc::new(PodWatchCtx {
         context_name,
         pod_regex,
+        pod_condition: cfg.pod_condition.clone(),
         container_discovery: cfg.container_discovery.clone(),
         container_incl,
         container_excl,

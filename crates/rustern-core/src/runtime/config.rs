@@ -3,6 +3,7 @@
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::context::ContextSelector;
+use crate::discovery::pod_condition::PodConditionFilter;
 use crate::discovery::pod_watcher::ContainerDiscoverOpts;
 use crate::format_display::{TimestampStyle, TimestampZone};
 use crate::pipeline::{FilterOn, QueryMode};
@@ -79,6 +80,8 @@ pub struct CoreRunConfig {
     pub exclude_container: Vec<String>,
     /// Which pod containers are surfaced as log sources (init / ephemeral / lifecycle).
     pub container_discovery: ContainerDiscoverOpts,
+    /// Optional pod status condition filter (`stern --condition`; requires `--no-follow` or `--tail=0`).
+    pub pod_condition: Option<PodConditionFilter>,
     /// Stream logs (`kubectl logs -f`).
     pub follow: bool,
     /// Tail line window per stream (non-negative seconds / lines).
