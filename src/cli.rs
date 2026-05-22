@@ -121,6 +121,10 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub tail: Option<i64>,
 
+    /// Filter pods by status condition (`ready=false`, etc.; only with `--no-follow` or `--tail=0`)
+    #[arg(long = "condition", value_name = "NAME[=VALUE]")]
+    pub condition: Option<String>,
+
     /// Only logs newer than this duration (`5m`, `2h`, `90s`) or a non-negative integer (seconds)
     #[arg(short = 's', long = "since", value_name = "DURATION|SECONDS")]
     pub since: Option<String>,
@@ -338,6 +342,13 @@ impl Cli {
         }
         for p in &self.highlight {
             Regex::new(p).map_err(|e| format!("invalid --highlight regex: {e}"))?;
+        }
+        if self.condition.is_some() && self.follow() && self.tail != Some(0) {
+            return Err("--condition only works with --no-follow or --tail=0".into());
+        }
+        if let Some(ref c) = self.condition {
+            rustern_core::discovery::pod_condition::parse_pod_condition(c)
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
