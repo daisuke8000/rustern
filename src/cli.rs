@@ -165,9 +165,15 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = FormatArg::Default)]
     pub format: FormatArg,
 
-    /// Stern-style timestamp prefix preset for the default formatter
-    #[arg(long, value_enum, default_value_t = TimestampArg::Default)]
-    pub timestamps: TimestampArg,
+    /// Stern-style timestamp prefix for the default formatter (`-t` / `--timestamps`; off unless set)
+    #[arg(
+        short = 't',
+        long = "timestamps",
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "default"
+    )]
+    pub timestamps: Option<TimestampArg>,
 
     #[arg(long, value_name = "ZONE")]
     pub timezone: Option<String>,
@@ -228,9 +234,8 @@ pub enum ContainerStateArg {
 }
 
 /// Default-formatter stamp shape (stern-aligned names).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum TimestampArg {
-    #[default]
     #[value(alias = "rfc3339")]
     Default,
     #[value(alias = "off")]
