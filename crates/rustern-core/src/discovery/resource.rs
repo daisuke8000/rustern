@@ -82,6 +82,32 @@ mod tests {
     }
 
     #[test]
+    fn stern_supported_kind_aliases_parse() {
+        for q in [
+            "pod/p",
+            "po/p",
+            "deploy/api",
+            "deployment/api",
+            "rs/api",
+            "replicaset/api",
+            "ds/api",
+            "daemonset/api",
+            "sts/api",
+            "statefulset/api",
+            "svc/api",
+            "service/api",
+            "rc/api",
+            "replicationcontroller/api",
+            "job/batch",
+        ] {
+            assert!(
+                matches!(parse_query(q).unwrap(), Query::LabelSelector { .. }),
+                "expected kind/name parse for {q}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_unknown_kind() {
         assert!(matches!(
             parse_query("foo/bar").unwrap_err(),

@@ -464,13 +464,12 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
                 list = list.fields(&merged_field_selector_for_pod_name(name, &cfg));
             }
             _ => {
-                let single_ns = (!cfg.all_namespaces && cfg.namespaces.len() == 1)
-                    .then_some(cfg.namespaces[0].as_str());
-                let resolved = workload_selector::resolve_label_selector_for_kind_query(
+                let resolved = workload_selector::resolve_label_selector_for_namespaces(
                     &client,
                     *kind,
                     name.as_str(),
-                    single_ns,
+                    &cfg.namespaces,
+                    cfg.all_namespaces,
                 )
                 .await?;
                 list = list.labels(&resolved);
