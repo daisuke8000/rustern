@@ -2,7 +2,7 @@
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};
-use rustern_core::source::pod_log::PodLogSource;
+use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{ContextName, Labels, LogSource, SourceKind, SourceMeta};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,9 +39,17 @@ async fn cancelled_source_drops_all_resources_within_100ms() {
         uid: "u1".into(),
     };
 
-    let src = PodLogSource::start(client, meta, pod_token.clone(), true, None, None)
-        .await
-        .unwrap();
+    let src = PodLogSource::start(
+        client,
+        meta,
+        pod_token.clone(),
+        PodLogRequest {
+            follow: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let weak = PodLogSource::meta_weak(&src);
     let mut stream = Box::new(src).into_stream();
     let _ = stream.next().await;

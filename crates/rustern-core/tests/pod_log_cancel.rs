@@ -2,7 +2,7 @@
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};
-use rustern_core::source::pod_log::PodLogSource;
+use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{ContextName, Labels, LogSource, SourceKind, SourceMeta};
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,9 +41,17 @@ async fn pod_token_cancellation_stops_source() {
         send.send_response(resp);
     });
 
-    let source = PodLogSource::start(client, sample_meta("p1"), pod_t.clone(), true, None, None)
-        .await
-        .unwrap();
+    let source = PodLogSource::start(
+        client,
+        sample_meta("p1"),
+        pod_t.clone(),
+        PodLogRequest {
+            follow: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let mut stream = Box::new(source).into_stream();
     let first = stream.next().await;
     assert!(first.is_some());
@@ -71,9 +79,17 @@ async fn root_token_cancels_child_sources() {
         send.send_response(resp);
     });
 
-    let source = PodLogSource::start(client, sample_meta("p1"), pod_t, true, None, None)
-        .await
-        .unwrap();
+    let source = PodLogSource::start(
+        client,
+        sample_meta("p1"),
+        pod_t,
+        PodLogRequest {
+            follow: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let mut stream = Box::new(source).into_stream();
     let _ = stream.next().await;
     root.cancel();

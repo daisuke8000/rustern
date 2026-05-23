@@ -8,7 +8,7 @@ use rustern_core::pipeline::{
 };
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{RenderCommand, render_task};
-use rustern_core::source::pod_log::PodLogSource;
+use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{ContextName, Labels, LogLevel, LogSource, SourceKind, SourceMeta};
 use rustern_core::{TimestampStyle, TimestampZone};
 use std::sync::Arc;
@@ -46,9 +46,17 @@ async fn mock_logs_through_pipeline_and_renderer() {
         uid: "uid-1".into(),
     };
 
-    let source = PodLogSource::start(client, meta, CancellationToken::new(), true, None, None)
-        .await
-        .unwrap();
+    let source = PodLogSource::start(
+        client,
+        meta,
+        CancellationToken::new(),
+        PodLogRequest {
+            follow: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
 
     let stream = Box::new(source).into_stream();
     let stream = container_filter(stream, Regex::new("app").unwrap(), Vec::new());

@@ -33,7 +33,7 @@ use crate::render::highlight::{SternHighlightLineFormatter, compile_stern_highli
 use crate::render::json_renderer::JsonLineFormatter;
 use crate::render::raw_renderer::RawLineFormatter;
 use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
-use crate::source::pod_log::PodLogSource;
+use crate::source::pod_log::{PodLogRequest, PodLogSource};
 use crate::source::{
     BoxedLogStream, ContextName, Labels, LogEvent, LogSource, LogSourceError, SourceKey,
     SourceKind, SourceMeta,
@@ -158,9 +158,7 @@ struct PodWatchCtx {
     mux_tx: mpsc::Sender<MuxCmd>,
     client: Client,
     root_child: CancellationToken,
-    follow: bool,
-    tail: Option<i64>,
-    since: Option<i64>,
+    pod_log: PodLogRequest,
     sem: Arc<Semaphore>,
     follow_limit_notifier: Option<mpsc::Sender<()>>,
 }
@@ -173,7 +171,7 @@ struct AttachPodLogParams {
 }
 
 async fn attach_pod_log_stream(p: AttachPodLogParams) {
-    let permit = if p.ctx.follow {
+    let permit = if p.ctx.pod_log.follow {
         match Arc::clone(&p.ctx.sem).try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
@@ -192,16 +190,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
     };
 
     let client = p.ctx.client.clone();
-    match PodLogSource::start(
-        client,
-        p.meta,
-        p.pod_token,
-        p.ctx.follow,
-        p.ctx.tail,
-        p.ctx.since,
-    )
-    .await
-    {
+    match PodLogSource::start(client, p.meta, p.pod_token, p.ctx.pod_log.clone()).await {
         Ok(src) => {
             let stream = Box::new(src).into_stream();
             let _ = p.ctx.mux_tx.send(MuxCmd::Add(p.key, stream)).await;
@@ -598,9 +587,13 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         exclude_pod,
         client,
         root_child: cfg.root_token.clone(),
-        follow: cfg.follow,
-        tail: cfg.tail,
-        since: cfg.since,
+        pod_log: PodLogRequest {
+            follow: cfg.follow,
+            tail: cfg.tail,
+            since_seconds: cfg.since,
+            since_time: cfg.since_time,
+            previous: cfg.previous,
+        },
         sem,
         mux_tx: mux_tx.clone(),
         follow_limit_notifier,

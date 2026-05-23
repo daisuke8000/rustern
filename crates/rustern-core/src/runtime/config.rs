@@ -86,8 +86,12 @@ pub struct CoreRunConfig {
     pub follow: bool,
     /// Tail line window per stream (non-negative seconds / lines).
     pub tail: Option<i64>,
-    /// Only logs newer than this age (already resolved seconds in core).
+    /// Only logs newer than this age (relative seconds; exclusive with [`Self::since_time`]).
     pub since: Option<i64>,
+    /// Only logs newer than this RFC3339 timestamp (kubectl `--since-time`).
+    pub since_time: Option<jiff::Timestamp>,
+    /// Logs from the previous terminated container instance (kubectl `--previous`).
+    pub previous: bool,
     /// Line-level include regex filters.
     pub include: Vec<String>,
     /// Line-level exclude regex filters.

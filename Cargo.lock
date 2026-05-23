@@ -1656,6 +1656,7 @@ dependencies = [
  "jaq-core",
  "jaq-json",
  "jaq-std",
+ "jiff",
  "k8s-openapi",
  "kube",
  "owo-colors",

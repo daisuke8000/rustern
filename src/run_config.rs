@@ -104,6 +104,11 @@ impl Cli {
     /// parsing may still fail here with the same error strings as validation.
     pub fn core_run_config(&self, root_token: CancellationToken) -> Result<CoreRunConfig, String> {
         let since = self.since.as_deref().map(parse_since).transpose()?;
+        let since_time = self
+            .since_time
+            .as_deref()
+            .map(rustern_core::source::pod_log::parse_since_time)
+            .transpose()?;
 
         let timestamp_style = match self.timestamps {
             None => TimestampStyle::Omit,
@@ -184,6 +189,8 @@ impl Cli {
             follow: self.follow(),
             tail: self.tail,
             since,
+            since_time,
+            previous: self.previous,
             include: self.include.clone(),
             exclude: self.exclude.clone(),
             highlight: self.highlight.clone(),
@@ -296,6 +303,23 @@ mod tests {
         ));
         assert_eq!(cfg.fwd.buffer_size, 4096);
         assert_eq!(cfg.fwd.max_log_requests, 50);
+    }
+
+    #[test]
+    fn maps_log_api_flags() {
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--since-time",
+            "2024-03-15T10:30:45Z",
+            "--previous",
+            "q",
+        ])
+        .unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(cfg.since_time.is_some());
+        assert!(cfg.since.is_none());
+        assert!(cfg.previous);
     }
 
     #[test]

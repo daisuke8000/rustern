@@ -24,6 +24,7 @@ bytes = { workspace = true }
 jaq-core = { workspace = true }
 jaq-std = { workspace = true }
 jaq-json = { workspace = true }
+jiff = { workspace = true }
 owo-colors = "4"
 seahash = "4"
 
