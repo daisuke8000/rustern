@@ -207,9 +207,11 @@ mod tests {
 
     fn cli_with_default_ns(args: &[&str]) -> Cli {
         let mut argv = vec!["rstn"];
-        let has_ns = args
-            .iter()
-            .any(|a| matches!(*a, "-n" | "--namespace" | "-A" | "--all-namespaces"));
+        let has_ns = args.iter().any(|a| {
+            matches!(*a, "-n" | "--namespace" | "-A" | "--all-namespaces")
+                || a.starts_with("--namespace=")
+                || a.starts_with("-n=")
+        });
         if !has_ns {
             argv.extend(["-n", "default"]);
         }
