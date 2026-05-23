@@ -127,6 +127,8 @@ pub enum RunError {
     Context(#[from] crate::discovery::context::ContextError),
     #[error(transparent)]
     Query(#[from] crate::discovery::resource::QueryParseError),
+    #[error(transparent)]
+    PodList(#[from] crate::discovery::pod_list::PodListError),
     #[error("invalid container regex: {0}")]
     ContainerRegex(#[from] regex::Error),
     #[error(transparent)]

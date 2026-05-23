@@ -9,8 +9,7 @@ use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 use kube::Client;
-use kube::api::ListParams;
-use kube::runtime::watcher::{Config as WatchConfig, Event, watcher};
+use kube::runtime::watcher::{Event, watcher};
 use regex::Regex;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinHandle;
@@ -18,20 +17,15 @@ use tokio_stream::StreamMap;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
-use super::config::{CoreRunConfig, FormatterChoice, RunError, RunOutcome, RuntimeFwdConfig};
+use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
 use super::forward::{LossyMetrics, build_log_request_semaphore, forward_to_render};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
 use crate::discovery::pod_condition::{PodConditionFilter, pod_matches_condition};
+use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
 use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod, reconcile};
-use crate::discovery::resource::{Query, ResourceKind, parse_query};
-use crate::discovery::workload_selector;
-use crate::pipeline::{ColorAssignOpts, validate_filter};
-use crate::render::default_renderer::DefaultLineFormatter;
-use crate::render::ext_json_renderer::ExtJsonLineFormatter;
-use crate::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
-use crate::render::json_renderer::JsonLineFormatter;
-use crate::render::raw_renderer::RawLineFormatter;
+use crate::pipeline::validate_filter;
+use crate::render::setup::{RenderSetupError, build_line_formatter, color_assign_opts};
 use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
 use crate::source::pod_log::{PodLogRequest, PodLogSource};
 use crate::source::{
@@ -44,69 +38,6 @@ enum MuxCmd {
     Remove(SourceKey),
 }
 
-fn color_assign_opts(cfg: &CoreRunConfig) -> ColorAssignOpts {
-    let FormatterChoice::Default {
-        pod_colors,
-        container_colors,
-        ..
-    } = &cfg.formatter
-    else {
-        return ColorAssignOpts {
-            pod_colors: false,
-            container_colors: false,
-            diff_container: false,
-        };
-    };
-    ColorAssignOpts {
-        pod_colors: *pod_colors,
-        container_colors: *container_colors,
-        diff_container: cfg.diff_container,
-    }
-}
-
-fn line_formatter(choice: &FormatterChoice) -> Arc<dyn LineFormatter> {
-    match choice {
-        FormatterChoice::Default {
-            timestamp_style,
-            timestamp_zone,
-            color_enabled,
-            pod_colors,
-            container_colors,
-        } => Arc::new(DefaultLineFormatter {
-            timestamp_style: *timestamp_style,
-            timestamp_zone: *timestamp_zone,
-            color_enabled: *color_enabled,
-            pod_colors: *pod_colors,
-            container_colors: *container_colors,
-        }),
-        FormatterChoice::Json => Arc::new(JsonLineFormatter),
-        FormatterChoice::ExtJson { all_namespaces } => Arc::new(ExtJsonLineFormatter {
-            all_namespaces: *all_namespaces,
-            pretty: false,
-        }),
-        FormatterChoice::PpExtJson { all_namespaces } => Arc::new(ExtJsonLineFormatter {
-            all_namespaces: *all_namespaces,
-            pretty: true,
-        }),
-        FormatterChoice::Raw => Arc::new(RawLineFormatter),
-    }
-}
-
-fn wrap_formatter_with_stern_highlight(
-    cfg: &CoreRunConfig,
-    inner: Arc<dyn LineFormatter>,
-) -> Result<Arc<dyn LineFormatter>, RunError> {
-    let FormatterChoice::Default { .. } = &cfg.formatter else {
-        return Ok(inner);
-    };
-
-    Ok(
-        match compile_stern_highlight_regex(&cfg.include, &cfg.highlight)? {
-            Some(re) => Arc::new(SternHighlightLineFormatter::new(inner, re)),
-            None => inner,
-        },
-    )
-}
 fn source_meta_for_key(context_name: &ContextName, key: &SourceKey) -> SourceMeta {
     SourceMeta {
         context: context_name.clone(),
@@ -385,38 +316,6 @@ fn spawn_pipeline_forward_task(
     ))
 }
 
-/// Merge user field selector fragments with stern-style node pinning (`spec.nodeName`).
-fn combined_field_selector(cfg: &CoreRunConfig) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(fs) = cfg.field_selector.as_ref() {
-        let t = fs.trim();
-        if !t.is_empty() {
-            parts.push(t.to_string());
-        }
-    }
-    if let Some(n) = cfg.node.as_ref() {
-        let t = n.trim();
-        if !t.is_empty() {
-            parts.push(format!("spec.nodeName={t}"));
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(","))
-    }
-}
-
-/// Exact pod name queries (`pod/<name>`) use **`fieldSelector`**, not `labelSelector`; merge with `--field-selector` / `--node`.
-fn merged_field_selector_for_pod_name(pod_name: &str, cfg: &CoreRunConfig) -> String {
-    let nm = pod_name.trim();
-    let mut parts = vec![format!("metadata.name={nm}")];
-    if let Some(rest) = combined_field_selector(cfg) {
-        parts.push(rest);
-    }
-    parts.join(",")
-}
-
 /// Main entry: watcher → `StreamMap` → pipeline → stdout.
 pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     if cfg.only_log_lines {
@@ -426,60 +325,17 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     }
 
     let client = build_client(&cfg.context).await?;
-    let query_src = if cfg.selector.is_some() && cfg.query == "." {
-        ".*"
-    } else {
-        cfg.query.as_str()
+    let plan_cfg = PodWatchPlanConfig {
+        query: &cfg.query,
+        selector: cfg.selector.as_deref(),
+        field_selector: cfg.field_selector.as_deref(),
+        node: cfg.node.as_deref(),
+        namespaces: &cfg.namespaces,
+        all_namespaces: cfg.all_namespaces,
     };
-    let q = parse_query(query_src)?;
-    let pod_regex = match &q {
-        Query::PodNameRegex(re) => Some(Regex::new(re)?),
-        Query::LabelSelector { .. } => None,
-    };
-    let kind_name = match &q {
-        Query::LabelSelector { kind, name } => Some((*kind, name.clone())),
-        Query::PodNameRegex(_) => None,
-    };
-
-    let pod_kind_field_query =
-        cfg.selector.is_none() && matches!(kind_name.as_ref(), Some((ResourceKind::Pod, _)));
-
-    let mut list = ListParams::default();
-    if let Some(sel) = cfg.selector.as_ref() {
-        list = list.labels(sel);
-    } else if let Some((kind, name)) = &kind_name {
-        match kind {
-            ResourceKind::Pod => {
-                list = list.fields(&merged_field_selector_for_pod_name(name, &cfg));
-            }
-            _ => {
-                let resolved = workload_selector::resolve_label_selector_for_namespaces(
-                    &client,
-                    *kind,
-                    name.as_str(),
-                    &cfg.namespaces,
-                    cfg.all_namespaces,
-                )
-                .await?;
-                list = list.labels(&resolved);
-            }
-        }
-    }
-
-    if !pod_kind_field_query && let Some(fs) = combined_field_selector(&cfg) {
-        list = list.fields(&fs);
-    }
-
-    let watch_cfg = {
-        let mut wc = WatchConfig::default();
-        if let Some(ls) = list.label_selector.as_deref() {
-            wc = wc.labels(ls);
-        }
-        if let Some(fs) = list.field_selector.as_deref() {
-            wc = wc.fields(fs);
-        }
-        wc
-    };
+    let plan = PodWatchPlan::build(&client, &plan_cfg).await?;
+    let pod_regex = plan.pod_regex;
+    let watch_cfg = plan.watch_cfg;
 
     let kube_cfg = resolve_kubeconfig(&cfg.context)?;
     let ctx_name = pick_context_name(&kube_cfg, &cfg.context)?;
@@ -550,7 +406,11 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         Duration::from_millis(50),
     ));
 
-    let formatter = wrap_formatter_with_stern_highlight(&cfg, line_formatter(&cfg.formatter))?;
+    let formatter = build_line_formatter(&cfg.formatter, &cfg.include, &cfg.highlight).map_err(
+        |e: RenderSetupError| match e {
+            RenderSetupError::HighlightRegex(re) => RunError::ContainerRegex(re),
+        },
+    )?;
 
     {
         let _ = &cfg.output; // reserved for future strict validation
@@ -568,7 +428,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
             filter_on: cfg.filter_on,
             jq: jq.clone(),
             level_key: cfg.level_key.clone(),
-            color_assign: color_assign_opts(&cfg),
+            color_assign: color_assign_opts(&cfg.formatter, cfg.diff_container),
         },
         render_tx.clone(),
         cfg.fwd.clone(),

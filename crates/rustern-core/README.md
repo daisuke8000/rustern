@@ -43,9 +43,11 @@ Index of `src/` paths and roles.
 | `discovery/context.rs` | kubeconfig and `kube::Client` |
 | `discovery/resource.rs` | Query string parsing (`kind/name` → selectors) |
 | `discovery/workload_selector.rs` | `GET` workload → pod label selector (single-ns) |
+| `discovery/pod_list.rs` | Query → `ListParams` / `WatchConfig`, field selector merge |
 | `discovery/pod_watcher.rs` | Pod → `SourceKey`, `reconcile` |
 | `pipeline/*.rs` | Line-stream transforms (order fixed by `runtime`) |
 | `render/mod.rs` | `RenderCommand`, `render_task`, `flush_ticker` |
+| `render/setup.rs` | `LineFormatter` selection, stern highlight wrap, color opts |
 | `render/default_renderer.rs`, `render/highlight.rs`, … | `LineFormatter` + stern-style emphasis |
 
 ## Architecture (layers and dependencies)
@@ -90,10 +92,14 @@ flowchart TD
 
     Runtime --> DiscCtx
     Runtime --> DiscRes
+    Runtime --> PodList["discovery/pod_list.rs"]
     Runtime --> PodWatcher
     Runtime --> PodLog
     Runtime --> Pipeline
     Runtime --> Render
+
+    PodList --> DiscRes
+    PodList --> DiscCtx
 
     PodLog --> SrcMod
     PodWatcher --> SrcMod
@@ -103,7 +109,7 @@ flowchart TD
     style Legend fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
 ```
 
-`runtime::runner::run` references `discovery/context` and `discovery/resource` directly. `pod_watcher` and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
+`runtime::runner::run` references `discovery/context`, `discovery/resource`, and `discovery/pod_list`. `pod_watcher` and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
 
 ### Layers explained
 
@@ -155,7 +161,7 @@ Without `json_query`, `jq_evaluate` is effectively optional plumbing; stage sema
 
 ### Steps
 
-1. **Setup** — `build_client`, `parse_query`, `ListParams` / `WatchConfig` (`context` / `resource`); `deploy/…` queries may **`GET`** a workload when scoped to one namespace without `-l`. `pod/<name>` scopes the watch via **`fieldSelector` `metadata.name=…`** merged with user field/node filters.
+1. **Setup** — `build_client`, [`PodWatchPlan::build`](src/discovery/pod_list.rs) (`parse_query`, `ListParams` / `WatchConfig`); `deploy/…` queries may **`GET`** a workload when scoped to one namespace without `-l`. `pod/<name>` scopes the watch via **`fieldSelector` `metadata.name=…`** merged with user field/node filters. Formatter wiring lives in [`render/setup.rs`](src/render/setup.rs).
 2. **Watch** — Pod `Apply` / `Delete` / `Init*` via kube `watcher`.
 3. **Keys and sources** — For each `SourceKey`, open logs with `PodLogSource::start`.
 4. **Merge** — Combine streams with `StreamMap<SourceKey, _>` (mux task).
