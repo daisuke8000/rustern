@@ -298,10 +298,101 @@ pub async fn resolve_label_selector_for_kind_query(
     }
 }
 
+/// Resolve a `kind/name` query to one list/watch label selector for the given namespace scope.
+pub async fn resolve_label_selector_for_namespaces(
+    client: &Client,
+    kind: ResourceKind,
+    name: &str,
+    namespaces: &[String],
+    all_namespaces: bool,
+) -> Result<String, kube::Error> {
+    if matches!(kind, ResourceKind::Pod) {
+        return Ok(label_selector_for(kind, name));
+    }
+    if all_namespaces {
+        tracing::warn!(
+            ?kind,
+            name,
+            "kind/name with --all-namespaces uses legacy app=<name> selector"
+        );
+        return Ok(label_selector_for(kind, name));
+    }
+    match namespaces.len() {
+        0 => Ok(label_selector_for(kind, name)),
+        1 => resolve_label_selector_for_kind_query(client, kind, name, Some(&namespaces[0])).await,
+        n => {
+            let mut selectors = Vec::with_capacity(n);
+            for ns in namespaces {
+                match resolve_label_selector_for_kind_query(client, kind, name, Some(ns.as_str()))
+                    .await
+                {
+                    Ok(selector) => selectors.push(selector),
+                    Err(err) => {
+                        tracing::warn!(
+                            ?kind,
+                            name,
+                            namespace = ns.as_str(),
+                            ?err,
+                            "failed to resolve selector in one namespace; falling back to app=<name>"
+                        );
+                        return Ok(label_selector_for(kind, name));
+                    }
+                }
+            }
+            Ok(unify_label_selectors(&selectors, kind, name))
+        }
+    }
+}
+
+/// When every namespace yields the same selector, use it; otherwise fall back to `app=<name>`.
+pub fn unify_label_selectors(selectors: &[String], kind: ResourceKind, name: &str) -> String {
+    if selectors.is_empty() {
+        return label_selector_for(kind, name);
+    }
+    let mut unique = selectors.to_vec();
+    unique.sort();
+    unique.dedup();
+    if unique.len() == 1 {
+        unique.into_iter().next().expect("len checked")
+    } else {
+        tracing::warn!(
+            ?kind,
+            name,
+            distinct = unique.len(),
+            "workload label selectors differ across namespaces; falling back to app=<name>"
+        );
+        label_selector_for(kind, name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelectorRequirement, ObjectMeta};
+
+    #[test]
+    fn unify_same_selectors_across_namespaces() {
+        assert_eq!(
+            unify_label_selectors(
+                &["app=api,tier=web".into(), "app=api,tier=web".into()],
+                ResourceKind::Deployment,
+                "api"
+            ),
+            "app=api,tier=web"
+        );
+    }
+
+    #[test]
+    fn unify_differing_selectors_falls_back_to_app() {
+        assert_eq!(
+            unify_label_selectors(
+                &["app=api".into(), "app=api,tier=web".into()],
+                ResourceKind::Deployment,
+                "api"
+            ),
+            "app=api"
+        );
+    }
 
     #[test]
     fn btree_join_sorted() {
