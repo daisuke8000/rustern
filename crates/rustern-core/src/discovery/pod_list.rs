@@ -18,22 +18,22 @@ pub enum PodListError {
 }
 
 /// Inputs for [`PodWatchPlan::build`] (subset of run config, kept in discovery to avoid layer cycles).
-pub struct PodWatchPlanConfig<'a> {
-    pub query: &'a str,
-    pub selector: Option<&'a str>,
-    pub field_selector: Option<&'a str>,
-    pub node: Option<&'a str>,
-    pub namespaces: &'a [String],
-    pub all_namespaces: bool,
+pub(crate) struct PodWatchPlanConfig<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) selector: Option<&'a str>,
+    pub(crate) field_selector: Option<&'a str>,
+    pub(crate) node: Option<&'a str>,
+    pub(crate) namespaces: &'a [String],
+    pub(crate) all_namespaces: bool,
 }
 
-pub struct PodWatchPlan {
-    pub watch_cfg: WatchConfig,
-    pub pod_regex: Option<Regex>,
+pub(crate) struct PodWatchPlan {
+    pub(crate) watch_cfg: WatchConfig,
+    pub(crate) pod_regex: Option<Regex>,
 }
 
 impl PodWatchPlan {
-    pub async fn build(
+    pub(crate) async fn build(
         client: &Client,
         cfg: &PodWatchPlanConfig<'_>,
     ) -> Result<Self, PodListError> {

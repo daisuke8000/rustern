@@ -408,7 +408,9 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
 
     let formatter = build_line_formatter(&cfg.formatter, &cfg.include, &cfg.highlight).map_err(
         |e: RenderSetupError| match e {
-            RenderSetupError::HighlightRegex(re) => RunError::ContainerRegex(re),
+            RenderSetupError::HighlightRegex(re) => {
+                RunError::Other(format!("invalid highlight/include regex: {re}"))
+            }
         },
     )?;
 
