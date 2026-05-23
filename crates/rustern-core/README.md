@@ -44,7 +44,9 @@ Index of `src/` paths and roles.
 | `discovery/resource.rs` | Query string parsing (`kind/name` → selectors) |
 | `discovery/workload_selector.rs` | `GET` workload → pod label selector (single-ns) |
 | `discovery/pod_list.rs` | Query → `ListParams` / `WatchConfig`, field selector merge |
-| `discovery/pod_watcher.rs` | Pod → `SourceKey`, `reconcile` |
+| `discovery/container_keys.rs` | Pod → `SourceKey` (`keys_from_pod`, container lifecycle filter) |
+| `discovery/pod_reconcile.rs` | `reconcile`, `pod_event_stream` |
+| `discovery/pod_watcher.rs` | Re-exports the above (stable import path) |
 | `pipeline/*.rs` | Line-stream transforms (order fixed by `runtime`) |
 | `render/mod.rs` | `RenderCommand`, `render_task`, `flush_ticker` |
 | `render/setup.rs` | `LineFormatter` selection, stern highlight wrap, color opts |
