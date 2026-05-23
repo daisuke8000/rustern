@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 mod cli;
 mod report;
 mod run_config;
+mod run_defaults;
 
 const SHUTDOWN_NONE: u8 = 0;
 const SHUTDOWN_SIGINT: u8 = 1;

@@ -15,6 +15,7 @@ use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 use crate::cli::{
     Cli, ColorArg, ContainerStateArg, FilterOnArg, FormatArg, JqModeArg, TimestampArg, parse_since,
 };
+use crate::run_defaults::resolved_pod_query;
 
 /// Deduped namespaces from repeatable `--namespace`/comma inputs; defaults to `[default]` when omitted.
 fn normalized_namespaces(cli: &Cli) -> Vec<String> {
@@ -166,7 +167,7 @@ impl Cli {
 
         Ok(CoreRunConfig {
             context: self.context_selector(),
-            query: self.query.clone(),
+            query: resolved_pod_query(self)?,
             namespaces,
             all_namespaces: self.all_namespaces,
             selector: self.selector.clone(),
@@ -620,6 +621,24 @@ mod tests {
         let cond = cfg.pod_condition.as_ref().unwrap();
         assert_eq!(cond.type_name, "ready");
         assert_eq!(cond.status, "False");
+    }
+
+    #[test]
+    fn maps_implicit_query_with_label_selector() {
+        let cli = Cli::try_parse_from(["rstn", "-l", "app=myapp"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert_eq!(cfg.query, ".*");
+        assert_eq!(cfg.selector.as_deref(), Some("app=myapp"));
+    }
+
+    #[test]
+    fn maps_implicit_query_with_field_selector() {
+        let cli = Cli::try_parse_from(["rstn", "--field-selector", "metadata.name=foo"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert_eq!(cfg.query, ".*");
+        assert_eq!(cfg.field_selector.as_deref(), Some("metadata.name=foo"));
     }
 
     #[test]
