@@ -14,9 +14,9 @@ use rustern_core::{ContextSelector, TimestampZone};
     long_about = None
 )]
 pub struct Cli {
-    /// Pod name regex or `kind/name` (e.g. `deploy/api`)
-    #[arg(value_name = "QUERY")]
-    pub query: String,
+    /// Pod name regex or `kind/name` (e.g. `deploy/api`); omit with `-l` or `--field-selector` (implicit `.*`)
+    #[arg(value_name = "QUERY", required = false)]
+    pub query: Option<String>,
 
     /// Kubeconfig file; omit for `rustern-core` default lookup (`KUBECONFIG` / `~/.kube/config`).
     #[arg(long, global = true, value_name = "PATH")]
@@ -371,6 +371,7 @@ impl Cli {
             rustern_core::discovery::pod_condition::parse_pod_condition(c)
                 .map_err(|e| e.to_string())?;
         }
+        crate::run_defaults::resolved_pod_query(self)?;
         Ok(())
     }
 }
@@ -401,7 +402,7 @@ mod tests {
     #[test]
     fn parses_minimal_query() {
         let cli = Cli::try_parse_from(["rstn", "myapp.*"]).unwrap();
-        assert_eq!(cli.query, "myapp.*");
+        assert_eq!(cli.query.as_deref(), Some("myapp.*"));
         assert!(cli.follow());
         let sel = cli.context_selector();
         assert!(sel.kubeconfig_path.is_none());
@@ -565,6 +566,18 @@ mod tests {
     fn validate_rejects_invalid_since_time() {
         let cli = Cli::try_parse_from(["rstn", "--since-time", "bogus", "q"]).unwrap();
         assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_label_selector_without_query() {
+        let cli = Cli::try_parse_from(["rstn", "-l", "app=foo"]).unwrap();
+        cli.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_accepts_field_selector_without_query() {
+        let cli = Cli::try_parse_from(["rstn", "--field-selector", "metadata.name=foo"]).unwrap();
+        cli.validate().unwrap();
     }
 
     #[test]

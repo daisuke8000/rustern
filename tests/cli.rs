@@ -9,7 +9,7 @@ fn help_lists_usage_and_query() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Usage:"))
-        .stdout(predicate::str::contains("<QUERY>"));
+        .stdout(predicate::str::contains("[QUERY]"));
 }
 
 #[test]
@@ -23,13 +23,35 @@ fn version_matches_cargo_package() {
 }
 
 #[test]
-fn requires_query() {
+fn requires_query_without_selector() {
     Command::cargo_bin("rstn")
         .unwrap()
         .assert()
         .failure()
-        .code(2)
-        .stderr(predicate::str::contains("<QUERY>"));
+        .code(1)
+        .stderr(predicate::str::contains("QUERY"));
+}
+
+#[test]
+fn label_selector_without_query_reaches_flag_validation() {
+    Command::cargo_bin("rstn")
+        .unwrap()
+        .args(["-l", "app=foo", "--tail=-1"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("--tail must be >= 0"));
+}
+
+#[test]
+fn field_selector_without_query_reaches_flag_validation() {
+    Command::cargo_bin("rstn")
+        .unwrap()
+        .args(["--field-selector", "metadata.name=foo", "--tail=-1"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("--tail must be >= 0"));
 }
 
 #[test]
