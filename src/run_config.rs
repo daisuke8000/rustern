@@ -15,28 +15,7 @@ use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 use crate::cli::{
     Cli, ColorArg, ContainerStateArg, FilterOnArg, FormatArg, JqModeArg, TimestampArg, parse_since,
 };
-use crate::run_defaults::resolved_pod_query;
-
-/// Deduped namespaces from repeatable `--namespace`/comma inputs; defaults to `[default]` when omitted.
-fn normalized_namespaces(cli: &Cli) -> Vec<String> {
-    let mut out = Vec::new();
-    for part in &cli.namespaces {
-        for seg in part.split(',') {
-            let t = seg.trim();
-            if t.is_empty() {
-                continue;
-            }
-            if !out.iter().any(|n| n == t) {
-                out.push(t.to_string());
-            }
-        }
-    }
-    if out.is_empty() {
-        vec!["default".to_string()]
-    } else {
-        out
-    }
-}
+use crate::run_defaults::{resolved_namespaces, resolved_pod_query};
 
 fn resolved_init_include(cli: &Cli) -> bool {
     if cli.no_init_containers {
@@ -159,11 +138,7 @@ impl Cli {
             FormatArg::Raw => (OutputMode::Raw, FormatterChoice::Raw),
         };
 
-        let namespaces = if self.all_namespaces {
-            Vec::new()
-        } else {
-            normalized_namespaces(self)
-        };
+        let namespaces = resolved_namespaces(self)?;
 
         Ok(CoreRunConfig {
             context: self.context_selector(),
@@ -230,10 +205,21 @@ mod tests {
     use rustern_core::QueryMode;
     use rustern_core::discovery::pod_watcher::{ContainerLifecycleBucket, ContainerStatePolicy};
 
+    fn cli_with_default_ns(args: &[&str]) -> Cli {
+        let mut argv = vec!["rstn"];
+        let has_ns = args
+            .iter()
+            .any(|a| matches!(*a, "-n" | "--namespace" | "-A" | "--all-namespaces"));
+        if !has_ns {
+            argv.extend(["-n", "default"]);
+        }
+        argv.extend(args.iter().copied().filter(|&a| a != "rstn"));
+        Cli::try_parse_from(argv).unwrap()
+    }
+
     #[test]
     fn maps_container_discovery_exclude_and_state() {
-        let cli = Cli::try_parse_from([
-            "rstn",
+        let cli = cli_with_default_ns(&[
             "-E",
             "a",
             "-E",
@@ -242,8 +228,7 @@ mod tests {
             "--container-state",
             "running",
             "q",
-        ])
-        .unwrap();
+        ]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.exclude_container, vec!["a", "b"]);
@@ -254,7 +239,7 @@ mod tests {
         };
         assert!(hs.len() == 1 && hs.contains(&ContainerLifecycleBucket::Running));
 
-        let cli_default = Cli::try_parse_from(["rstn", "q"]).unwrap();
+        let cli_default = cli_with_default_ns(&["q"]);
         cli_default.validate().unwrap();
         assert!(
             cli_default
@@ -267,7 +252,7 @@ mod tests {
 
     #[test]
     fn maps_no_ephemeral_containers_flag() {
-        let cli = Cli::try_parse_from(["rstn", "--no-ephemeral-containers", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--no-ephemeral-containers", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(!cfg.container_discovery.include_ephemeral_containers);
@@ -275,7 +260,7 @@ mod tests {
 
     #[test]
     fn maps_container_state_all_precedence() {
-        let cli = Cli::try_parse_from(["rstn", "--container-state", "running,all", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--container-state", "running,all", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -286,7 +271,33 @@ mod tests {
 
     #[test]
     fn maps_minimal_cli_to_core_config() {
-        let cli = Cli::try_parse_from(["rstn", "myapp.*"]).unwrap();
+        use std::io::Write;
+        let kube = r#"
+apiVersion: v1
+kind: Config
+current-context: ctx
+contexts:
+  - name: ctx
+    context:
+      cluster: c
+      user: u
+clusters:
+  - name: c
+    cluster:
+      server: https://localhost
+users:
+  - name: u
+    user: {}
+"#;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(kube.as_bytes()).unwrap();
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--kubeconfig",
+            f.path().to_str().unwrap(),
+            "myapp.*",
+        ])
+        .unwrap();
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.query, "myapp.*");
@@ -308,14 +319,7 @@ mod tests {
 
     #[test]
     fn maps_log_api_flags() {
-        let cli = Cli::try_parse_from([
-            "rstn",
-            "--since-time",
-            "2024-03-15T10:30:45Z",
-            "--previous",
-            "q",
-        ])
-        .unwrap();
+        let cli = cli_with_default_ns(&["--since-time", "2024-03-15T10:30:45Z", "--previous", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(cfg.since_time.is_some());
@@ -325,7 +329,7 @@ mod tests {
 
     #[test]
     fn stern_aligned_default_max_when_no_follow() {
-        let cli = Cli::try_parse_from(["rstn", "--no-follow", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--no-follow", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(!cfg.follow);
@@ -372,15 +376,15 @@ mod tests {
 
     #[test]
     fn maps_context_selector_fields() {
-        let cli = Cli::try_parse_from([
-            "rstn",
+        let cli = cli_with_default_ns(&[
             "--kubeconfig",
             "/etc/kube",
             "--context",
             "prod",
+            "-n",
+            "default",
             "x",
-        ])
-        .unwrap();
+        ]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(
@@ -392,8 +396,7 @@ mod tests {
 
     #[test]
     fn maps_filter_on_and_jq_mode() {
-        let cli = Cli::try_parse_from([
-            "rstn",
+        let cli = cli_with_default_ns(&[
             "--filter-on",
             "transformed",
             "--jq-mode",
@@ -401,8 +404,7 @@ mod tests {
             "--jq",
             ".msg",
             "q",
-        ])
-        .unwrap();
+        ]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.filter_on, FilterOn::Transformed);
@@ -412,7 +414,7 @@ mod tests {
 
     #[test]
     fn omits_timestamps_by_default() {
-        let cli = Cli::try_parse_from(["rstn", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -426,7 +428,7 @@ mod tests {
 
     #[test]
     fn maps_bare_timestamps_flag_to_stern_default() {
-        let cli = Cli::try_parse_from(["rstn", "q", "-t"]).unwrap();
+        let cli = cli_with_default_ns(&["q", "-t"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -441,8 +443,7 @@ mod tests {
 
     #[test]
     fn maps_timestamps_short_and_timezone() {
-        let cli =
-            Cli::try_parse_from(["rstn", "--timestamps=short", "--timezone", "UTC", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--timestamps=short", "--timezone", "UTC", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -457,7 +458,7 @@ mod tests {
 
     #[test]
     fn maps_since_duration_to_seconds() {
-        let cli = Cli::try_parse_from(["rstn", "--since", "5m", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--since", "5m", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.since, Some(300));
@@ -465,13 +466,13 @@ mod tests {
 
     #[test]
     fn core_run_config_errors_on_invalid_since_without_validate() {
-        let cli = Cli::try_parse_from(["rstn", "--since", "not-a-time", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--since", "not-a-time", "q"]);
         assert!(cli.core_run_config(CancellationToken::new()).is_err());
     }
 
     #[test]
     fn maps_color_auto_matches_stdout_tty() {
-        let cli = Cli::try_parse_from(["rstn", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         let expect = io::stdout().is_terminal();
@@ -486,7 +487,7 @@ mod tests {
 
     #[test]
     fn maps_color_always_enables_color() {
-        let cli = Cli::try_parse_from(["rstn", "--color", "always", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--color", "always", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -518,8 +519,7 @@ mod tests {
 
     #[test]
     fn maps_field_selector_and_node_and_exclude_pod() {
-        let cli = Cli::try_parse_from([
-            "rstn",
+        let cli = cli_with_default_ns(&[
             "--field-selector",
             "status.phase=Running",
             "--node",
@@ -527,8 +527,7 @@ mod tests {
             "--exclude-pod",
             "junk-.*",
             ".*",
-        ])
-        .unwrap();
+        ]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.field_selector.as_deref(), Some("status.phase=Running"));
@@ -538,7 +537,7 @@ mod tests {
 
     #[test]
     fn maps_color_never_disables_color() {
-        let cli = Cli::try_parse_from(["rstn", "--color", "never", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--color", "never", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -552,14 +551,12 @@ mod tests {
 
     #[test]
     fn maps_pod_and_container_color_flags() {
-        let cli = Cli::try_parse_from([
-            "rstn",
+        let cli = cli_with_default_ns(&[
             "--no-pod-colors",
             "--container-colors",
             "--diff-container",
             "q",
-        ])
-        .unwrap();
+        ]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -575,7 +572,7 @@ mod tests {
 
     #[test]
     fn maps_no_container_colors() {
-        let cli = Cli::try_parse_from(["rstn", "--no-container-colors", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--no-container-colors", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert!(matches!(
@@ -589,22 +586,13 @@ mod tests {
 
     #[test]
     fn validate_rejects_conflicting_pod_color_flags() {
-        let cli =
-            Cli::try_parse_from(["rstn", "--no-pod-colors", "--pod-colors=true", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--no-pod-colors", "--pod-colors=true", "q"]);
         assert!(cli.validate().is_err());
     }
 
     #[test]
     fn maps_highlight_and_only_log_lines() {
-        let cli = Cli::try_parse_from([
-            "rstn",
-            "--no-follow",
-            "-H",
-            "panic",
-            "--only-log-lines",
-            ".",
-        ])
-        .unwrap();
+        let cli = cli_with_default_ns(&["--no-follow", "-H", "panic", "--only-log-lines", "."]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.highlight, vec!["panic".to_string()]);
@@ -614,8 +602,7 @@ mod tests {
 
     #[test]
     fn maps_condition_with_no_follow() {
-        let cli =
-            Cli::try_parse_from(["rstn", "--no-follow", "--condition=ready=false", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--no-follow", "--condition=ready=false", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         let cond = cfg.pod_condition.as_ref().unwrap();
@@ -625,7 +612,7 @@ mod tests {
 
     #[test]
     fn maps_implicit_query_with_label_selector() {
-        let cli = Cli::try_parse_from(["rstn", "-l", "app=myapp"]).unwrap();
+        let cli = cli_with_default_ns(&["-l", "app=myapp"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.query, ".*");
@@ -634,7 +621,7 @@ mod tests {
 
     #[test]
     fn maps_implicit_query_with_field_selector() {
-        let cli = Cli::try_parse_from(["rstn", "--field-selector", "metadata.name=foo"]).unwrap();
+        let cli = cli_with_default_ns(&["--field-selector", "metadata.name=foo"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.query, ".*");
@@ -642,8 +629,38 @@ mod tests {
     }
 
     #[test]
+    fn maps_context_default_namespace_from_kubeconfig() {
+        use std::io::Write;
+        let kube = r#"
+apiVersion: v1
+kind: Config
+current-context: staging
+contexts:
+  - name: staging
+    context:
+      cluster: c
+      user: u
+      namespace: team-a
+clusters:
+  - name: c
+    cluster:
+      server: https://localhost
+users:
+  - name: u
+    user: {}
+"#;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(kube.as_bytes()).unwrap();
+        let cli =
+            Cli::try_parse_from(["rstn", "--kubeconfig", f.path().to_str().unwrap(), "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert_eq!(cfg.namespaces, vec!["team-a"]);
+    }
+
+    #[test]
     fn rejects_condition_with_follow_without_tail_zero() {
-        let cli = Cli::try_parse_from(["rstn", "-f", "--condition=ready", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["-f", "--condition=ready", "q"]);
         assert!(cli.validate().is_err());
     }
 }

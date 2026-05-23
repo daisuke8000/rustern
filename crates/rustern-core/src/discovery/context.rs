@@ -57,6 +57,26 @@ pub fn pick_context_name<'a>(
     }
 }
 
+/// Namespace for the active context: context `namespace` when set, otherwise `"default"`.
+pub fn default_namespace(
+    cfg: &Kubeconfig,
+    selector: &ContextSelector,
+) -> Result<String, ContextError> {
+    let ctx_name = pick_context_name(cfg, selector)?;
+    let named = cfg
+        .contexts
+        .iter()
+        .find(|c| c.name == ctx_name)
+        .ok_or_else(|| ContextError::ContextNotFound(ctx_name.to_string()))?;
+    Ok(named
+        .context
+        .as_ref()
+        .and_then(|ctx| ctx.namespace.as_deref())
+        .filter(|ns| !ns.trim().is_empty())
+        .unwrap_or("default")
+        .to_string())
+}
+
 pub async fn build_client(selector: &ContextSelector) -> Result<Client, ContextError> {
     let kubeconfig = resolve_kubeconfig(selector)?;
     let ctx_name = pick_context_name(&kubeconfig, selector)?;
@@ -143,5 +163,84 @@ users:
         };
         let err = pick_context_name(&cfg, &sel).unwrap_err();
         assert!(matches!(err, ContextError::ContextNotFound(_)));
+    }
+
+    #[test]
+    fn default_namespace_uses_context_namespace_when_set() {
+        let content = r#"
+apiVersion: v1
+kind: Config
+current-context: staging
+contexts:
+  - name: staging
+    context:
+      cluster: local
+      user: dev
+      namespace: team-a
+clusters:
+  - name: local
+    cluster:
+      server: https://localhost
+users:
+  - name: dev
+    user: {}
+"#;
+        let f = write_temp(content);
+        let cfg = Kubeconfig::read_from(f.path()).unwrap();
+        let sel = ContextSelector {
+            kubeconfig_path: Some(f.path().to_path_buf()),
+            ..Default::default()
+        };
+        assert_eq!(default_namespace(&cfg, &sel).unwrap(), "team-a");
+    }
+
+    #[test]
+    fn default_namespace_falls_back_to_default_when_unset() {
+        let f = write_temp(SAMPLE);
+        let cfg = Kubeconfig::read_from(f.path()).unwrap();
+        let sel = ContextSelector {
+            kubeconfig_path: Some(f.path().to_path_buf()),
+            ..Default::default()
+        };
+        assert_eq!(default_namespace(&cfg, &sel).unwrap(), "default");
+    }
+
+    #[test]
+    fn default_namespace_honors_explicit_context_flag() {
+        let content = r#"
+apiVersion: v1
+kind: Config
+current-context: default
+contexts:
+  - name: default
+    context:
+      cluster: local
+      user: dev
+      namespace: wrong
+  - name: prod
+    context:
+      cluster: prod
+      user: prod
+      namespace: production
+clusters:
+  - name: local
+    cluster:
+      server: https://localhost
+  - name: prod
+    cluster:
+      server: https://prod.example.com
+users:
+  - name: dev
+    user: {}
+  - name: prod
+    user: {}
+"#;
+        let f = write_temp(content);
+        let cfg = Kubeconfig::read_from(f.path()).unwrap();
+        let sel = ContextSelector {
+            kubeconfig_path: Some(f.path().to_path_buf()),
+            context_name: Some("prod".into()),
+        };
+        assert_eq!(default_namespace(&cfg, &sel).unwrap(), "production");
     }
 }
