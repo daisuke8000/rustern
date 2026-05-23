@@ -9,7 +9,7 @@ use rustern_core::discovery::pod_condition::parse_pod_condition;
 use rustern_core::discovery::pod_watcher::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
-use rustern_core::{CoreRunConfig, FormatterChoice, OutputMode, RuntimeFwdConfig};
+use rustern_core::{CoreRunConfig, FormatterChoice, OutputMode, PodLogRequest, RuntimeFwdConfig};
 use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 
 use crate::cli::{
@@ -162,11 +162,13 @@ impl Cli {
                 .map(parse_pod_condition)
                 .transpose()
                 .map_err(|e| e.to_string())?,
-            follow: self.follow(),
-            tail: self.tail,
-            since,
-            since_time,
-            previous: self.previous,
+            pod_log: PodLogRequest {
+                follow: self.follow(),
+                tail: self.tail,
+                since_seconds: since,
+                since_time,
+                previous: self.previous,
+            },
             include: self.include.clone(),
             exclude: self.exclude.clone(),
             highlight: self.highlight.clone(),
@@ -303,7 +305,7 @@ users:
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.query, "myapp.*");
-        assert!(cfg.follow);
+        assert!(cfg.pod_log.follow);
         assert!(!cfg.all_namespaces);
         assert_eq!(cfg.namespaces, vec!["default"]);
         assert_eq!(cfg.container, ".*");
@@ -324,9 +326,9 @@ users:
         let cli = cli_with_default_ns(&["--since-time", "2024-03-15T10:30:45Z", "--previous", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-        assert!(cfg.since_time.is_some());
-        assert!(cfg.since.is_none());
-        assert!(cfg.previous);
+        assert!(cfg.pod_log.since_time.is_some());
+        assert!(cfg.pod_log.since_seconds.is_none());
+        assert!(cfg.pod_log.previous);
     }
 
     #[test]
@@ -334,7 +336,7 @@ users:
         let cli = cli_with_default_ns(&["--no-follow", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-        assert!(!cfg.follow);
+        assert!(!cfg.pod_log.follow);
         assert_eq!(cfg.fwd.max_log_requests, 5);
     }
 
@@ -358,7 +360,7 @@ users:
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
         assert_eq!(cfg.namespaces, vec!["kube-system"]);
-        assert!(!cfg.follow);
+        assert!(!cfg.pod_log.follow);
         assert!(matches!(cfg.output, OutputMode::Json));
         assert!(matches!(cfg.formatter, FormatterChoice::Json));
         assert_eq!(cfg.fwd.buffer_size, 8192);
@@ -463,7 +465,7 @@ users:
         let cli = cli_with_default_ns(&["--since", "5m", "q"]);
         cli.validate().unwrap();
         let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-        assert_eq!(cfg.since, Some(300));
+        assert_eq!(cfg.pod_log.since_seconds, Some(300));
     }
 
     #[test]

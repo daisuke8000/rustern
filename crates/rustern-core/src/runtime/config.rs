@@ -7,6 +7,7 @@ use crate::discovery::pod_condition::PodConditionFilter;
 use crate::discovery::pod_watcher::ContainerDiscoverOpts;
 use crate::format_display::{TimestampStyle, TimestampZone};
 use crate::pipeline::{FilterOn, QueryMode};
+use crate::source::pod_log::PodLogRequest;
 
 /// Bounded queue and parallelism hints for forwarded log events (`run` runtime).
 #[derive(Debug, Clone)]
@@ -82,16 +83,8 @@ pub struct CoreRunConfig {
     pub container_discovery: ContainerDiscoverOpts,
     /// Optional pod status condition filter (`stern --condition`; requires `--no-follow` or `--tail=0`).
     pub pod_condition: Option<PodConditionFilter>,
-    /// Stream logs (`kubectl logs -f`).
-    pub follow: bool,
-    /// Tail line window per stream (non-negative seconds / lines).
-    pub tail: Option<i64>,
-    /// Only logs newer than this age (relative seconds; exclusive with [`Self::since_time`]).
-    pub since: Option<i64>,
-    /// Only logs newer than this RFC3339 timestamp (kubectl `--since-time`).
-    pub since_time: Option<jiff::Timestamp>,
-    /// Logs from the previous terminated container instance (kubectl `--previous`).
-    pub previous: bool,
+    /// Kubernetes log subresource knobs (`kubectl logs` flags).
+    pub pod_log: PodLogRequest,
     /// Line-level include regex filters.
     pub include: Vec<String>,
     /// Line-level exclude regex filters.
