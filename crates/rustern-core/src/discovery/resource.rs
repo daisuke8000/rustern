@@ -83,26 +83,34 @@ mod tests {
 
     #[test]
     fn stern_supported_kind_aliases_parse() {
-        for q in [
-            "pod/p",
-            "po/p",
-            "deploy/api",
-            "deployment/api",
-            "rs/api",
-            "replicaset/api",
-            "ds/api",
-            "daemonset/api",
-            "sts/api",
-            "statefulset/api",
-            "svc/api",
-            "service/api",
-            "rc/api",
-            "replicationcontroller/api",
-            "job/batch",
+        for (q, kind, name) in [
+            ("pod/p", ResourceKind::Pod, "p"),
+            ("po/p", ResourceKind::Pod, "p"),
+            ("deploy/api", ResourceKind::Deployment, "api"),
+            ("deployment/api", ResourceKind::Deployment, "api"),
+            ("rs/api", ResourceKind::ReplicaSet, "api"),
+            ("replicaset/api", ResourceKind::ReplicaSet, "api"),
+            ("ds/api", ResourceKind::DaemonSet, "api"),
+            ("daemonset/api", ResourceKind::DaemonSet, "api"),
+            ("sts/api", ResourceKind::StatefulSet, "api"),
+            ("statefulset/api", ResourceKind::StatefulSet, "api"),
+            ("svc/api", ResourceKind::Service, "api"),
+            ("service/api", ResourceKind::Service, "api"),
+            ("rc/api", ResourceKind::ReplicationController, "api"),
+            (
+                "replicationcontroller/api",
+                ResourceKind::ReplicationController,
+                "api",
+            ),
+            ("job/batch", ResourceKind::Job, "batch"),
         ] {
-            assert!(
-                matches!(parse_query(q).unwrap(), Query::LabelSelector { .. }),
-                "expected kind/name parse for {q}"
+            assert_eq!(
+                parse_query(q).unwrap(),
+                Query::LabelSelector {
+                    kind,
+                    name: name.into(),
+                },
+                "expected exact kind/name parse for {q}"
             );
         }
     }

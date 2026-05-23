@@ -323,10 +323,21 @@ pub async fn resolve_label_selector_for_namespaces(
         n => {
             let mut selectors = Vec::with_capacity(n);
             for ns in namespaces {
-                selectors.push(
-                    resolve_label_selector_for_kind_query(client, kind, name, Some(ns.as_str()))
-                        .await?,
-                );
+                match resolve_label_selector_for_kind_query(client, kind, name, Some(ns.as_str()))
+                    .await
+                {
+                    Ok(selector) => selectors.push(selector),
+                    Err(err) => {
+                        tracing::warn!(
+                            ?kind,
+                            name,
+                            namespace = ns.as_str(),
+                            ?err,
+                            "failed to resolve selector in one namespace; falling back to app=<name>"
+                        );
+                        return Ok(label_selector_for(kind, name));
+                    }
+                }
             }
             Ok(unify_label_selectors(&selectors, kind, name))
         }
