@@ -187,7 +187,6 @@ mod tests {
 
     #[test]
     fn default_timestamp_uses_rfc3339_nano() {
-        use chrono::TimeZone;
         let dt = Utc.with_ymd_and_hms(2024, 3, 15, 10, 30, 45).unwrap();
         let prefix = format_wall_prefix(&dt, TimestampStyle::Rfc3339, TimestampZone::Utc).unwrap();
         assert!(prefix.contains('.'));
