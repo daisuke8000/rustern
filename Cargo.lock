@@ -1638,6 +1638,7 @@ dependencies = [
  "predicates",
  "regex",
  "rustern-core",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]

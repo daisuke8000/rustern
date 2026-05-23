@@ -372,6 +372,7 @@ impl Cli {
                 .map_err(|e| e.to_string())?;
         }
         crate::run_defaults::resolved_pod_query(self)?;
+        crate::run_defaults::resolved_namespaces(self)?;
         Ok(())
     }
 }
@@ -398,6 +399,20 @@ pub(crate) fn parse_since(s: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cli_with_default_ns(args: &[&str]) -> Cli {
+        let mut argv = vec!["rstn"];
+        let has_ns = args.iter().any(|a| {
+            matches!(*a, "-n" | "--namespace" | "-A" | "--all-namespaces")
+                || a.starts_with("--namespace=")
+                || a.starts_with("-n=")
+        });
+        if !has_ns {
+            argv.extend(["-n", "default"]);
+        }
+        argv.extend(args.iter().copied().filter(|&a| a != "rstn"));
+        Cli::try_parse_from(argv).unwrap()
+    }
 
     #[test]
     fn parses_minimal_query() {
@@ -433,14 +448,14 @@ mod tests {
 
     #[test]
     fn no_init_containers_sets_exclusion_semantics_on_parse() {
-        let cli = Cli::try_parse_from(["rstn", "--no-init-containers", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--no-init-containers", "q"]);
         assert!(cli.no_init_containers);
         cli.validate().unwrap();
     }
 
     #[test]
     fn init_containers_eq_false_via_boolish_parser() {
-        let cli = Cli::try_parse_from(["rstn", "--init-containers=false", "q"]).expect("parsed");
+        let cli = cli_with_default_ns(&["--init-containers=false", "q"]);
         assert_eq!(cli.init_containers, Some(false));
         assert!(cli.validate().is_ok());
     }
@@ -536,13 +551,13 @@ mod tests {
 
     #[test]
     fn validate_accepts_defaults() {
-        let cli = Cli::try_parse_from(["rstn", "x"]).unwrap();
+        let cli = cli_with_default_ns(&["x"]);
         cli.validate().unwrap();
     }
 
     #[test]
     fn since_accepts_short_s_flag() {
-        let cli = Cli::try_parse_from(["rstn", "-s", "2m", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["-s", "2m", "q"]);
         cli.validate().unwrap();
         assert_eq!(cli.since.as_deref(), Some("2m"));
     }
@@ -570,19 +585,19 @@ mod tests {
 
     #[test]
     fn validate_accepts_label_selector_without_query() {
-        let cli = Cli::try_parse_from(["rstn", "-l", "app=foo"]).unwrap();
+        let cli = cli_with_default_ns(&["-l", "app=foo"]);
         cli.validate().unwrap();
     }
 
     #[test]
     fn validate_accepts_field_selector_without_query() {
-        let cli = Cli::try_parse_from(["rstn", "--field-selector", "metadata.name=foo"]).unwrap();
+        let cli = cli_with_default_ns(&["--field-selector", "metadata.name=foo"]);
         cli.validate().unwrap();
     }
 
     #[test]
     fn previous_flag_parses() {
-        let cli = Cli::try_parse_from(["rstn", "--previous", "q"]).unwrap();
+        let cli = cli_with_default_ns(&["--previous", "q"]);
         cli.validate().unwrap();
         assert!(cli.previous);
     }
