@@ -126,8 +126,21 @@ pub struct Cli {
     pub condition: Option<String>,
 
     /// Only logs newer than this duration (`5m`, `2h`, `90s`) or a non-negative integer (seconds)
-    #[arg(short = 's', long = "since", value_name = "DURATION|SECONDS")]
+    #[arg(
+        short = 's',
+        long = "since",
+        value_name = "DURATION|SECONDS",
+        conflicts_with = "since_time"
+    )]
     pub since: Option<String>,
+
+    /// Only logs newer than this RFC3339 timestamp (kubectl `--since-time`; exclusive with `--since`)
+    #[arg(long = "since-time", value_name = "RFC3339", conflicts_with = "since")]
+    pub since_time: Option<String>,
+
+    /// Logs from the previous terminated container instance (kubectl `--previous`)
+    #[arg(long = "previous", action = clap::ArgAction::SetTrue)]
+    pub previous: bool,
 
     /// Include lines matching regex (repeatable)
     #[arg(short = 'i', long = "include", action = clap::ArgAction::Append)]
@@ -308,6 +321,9 @@ impl Cli {
         }
         if let Some(s) = &self.since {
             parse_since(s)?;
+        }
+        if let Some(s) = &self.since_time {
+            rustern_core::source::pod_log::parse_since_time(s)?;
         }
         if self.buffer_size == 0 {
             return Err("--buffer-size must be > 0".into());
@@ -528,5 +544,33 @@ mod tests {
         let cli = Cli::try_parse_from(["rstn", "-s", "2m", "q"]).unwrap();
         cli.validate().unwrap();
         assert_eq!(cli.since.as_deref(), Some("2m"));
+    }
+
+    #[test]
+    fn since_and_since_time_conflict() {
+        assert!(
+            Cli::try_parse_from([
+                "rstn",
+                "--since",
+                "5m",
+                "--since-time",
+                "2024-01-01T00:00:00Z",
+                "q"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_since_time() {
+        let cli = Cli::try_parse_from(["rstn", "--since-time", "bogus", "q"]).unwrap();
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn previous_flag_parses() {
+        let cli = Cli::try_parse_from(["rstn", "--previous", "q"]).unwrap();
+        cli.validate().unwrap();
+        assert!(cli.previous);
     }
 }

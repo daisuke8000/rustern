@@ -2,7 +2,7 @@
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};
-use rustern_core::source::pod_log::PodLogSource;
+use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{ContextName, Labels, LogSource, SourceKind, SourceMeta};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -44,9 +44,17 @@ async fn retries_until_success() {
         uid: "u1".into(),
     };
 
-    let source = PodLogSource::start(client, meta, CancellationToken::new(), true, None, None)
-        .await
-        .unwrap();
+    let source = PodLogSource::start(
+        client,
+        meta,
+        CancellationToken::new(),
+        PodLogRequest {
+            follow: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let stream = Box::new(source).into_stream();
     let events: Vec<_> = stream.collect().await;
     server.await.unwrap();

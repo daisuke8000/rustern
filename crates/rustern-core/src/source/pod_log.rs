@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use futures::AsyncBufRead;
 use futures::StreamExt;
 use futures::io::{AsyncBufReadExt, BufReader};
+use jiff::Timestamp;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::LogParams;
 use kube::{Api, Client};
@@ -13,19 +14,39 @@ use tokio_util::sync::CancellationToken;
 
 use super::{BoxedLogStream, LogEvent, LogSource, LogSourceError, SourceMeta};
 
+/// Kubernetes log subresource knobs (maps to [`LogParams`]).
+#[derive(Debug, Clone, Default)]
+pub struct PodLogRequest {
+    pub follow: bool,
+    pub tail: Option<i64>,
+    pub since_seconds: Option<i64>,
+    pub since_time: Option<Timestamp>,
+    pub previous: bool,
+}
+
+pub fn parse_since_time(raw: &str) -> Result<Timestamp, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("empty --since-time".into());
+    }
+    s.parse::<Timestamp>()
+        .map_err(|_| format!("invalid --since-time (expected RFC3339): {s}"))
+}
+
 /// Build `kube::api::LogParams` for the Kubernetes log API.
-pub fn build_log_params(
-    meta: &SourceMeta,
-    follow: bool,
-    tail: Option<i64>,
-    since: Option<i64>,
-) -> LogParams {
+pub fn build_log_params(meta: &SourceMeta, req: &PodLogRequest) -> LogParams {
     LogParams {
         container: Some(meta.container.clone()),
-        follow,
+        follow: req.follow,
         timestamps: true,
-        tail_lines: tail,
-        since_seconds: since,
+        tail_lines: req.tail,
+        since_seconds: if req.since_time.is_some() {
+            None
+        } else {
+            req.since_seconds
+        },
+        since_time: req.since_time,
+        previous: req.previous,
         ..Default::default()
     }
 }
@@ -69,12 +90,10 @@ impl PodLogSource {
         client: Client,
         meta: SourceMeta,
         token: CancellationToken,
-        follow: bool,
-        tail: Option<i64>,
-        since: Option<i64>,
+        req: PodLogRequest,
     ) -> Result<Self, LogSourceError> {
         let api: Api<Pod> = Api::namespaced(client, &meta.namespace);
-        let params = build_log_params(&meta, follow, tail, since);
+        let params = build_log_params(&meta, &req);
         let reader = log_stream_with_retry(&api, &meta.pod, &params, 3).await?;
         let reader = BufReader::new(reader);
         let lines = reader.lines();
@@ -162,5 +181,63 @@ impl LogSource for PodLogSource {
     }
     fn into_stream(self: Box<Self>) -> BoxedLogStream {
         self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::{ContextName, Labels, SourceKind, SourceMeta};
+
+    fn sample_meta() -> SourceMeta {
+        SourceMeta {
+            context: ContextName("c".into()),
+            namespace: "ns".into(),
+            pod: "p".into(),
+            container: "app".into(),
+            kind: SourceKind::PodLog,
+            node: None,
+            labels: Arc::new(Labels::default()),
+            uid: "uid".into(),
+        }
+    }
+
+    #[test]
+    fn build_log_params_sets_previous_and_since_time() {
+        let ts: Timestamp = "2024-03-15T10:30:45Z".parse().unwrap();
+        let params = build_log_params(
+            &sample_meta(),
+            &PodLogRequest {
+                follow: true,
+                tail: Some(100),
+                since_time: Some(ts),
+                previous: true,
+                ..Default::default()
+            },
+        );
+        assert!(params.previous);
+        assert!(params.since_time.is_some());
+        assert!(params.since_seconds.is_none());
+        assert_eq!(params.tail_lines, Some(100));
+    }
+
+    #[test]
+    fn build_log_params_uses_since_seconds_when_no_since_time() {
+        let params = build_log_params(
+            &sample_meta(),
+            &PodLogRequest {
+                since_seconds: Some(300),
+                ..Default::default()
+            },
+        );
+        assert_eq!(params.since_seconds, Some(300));
+        assert!(params.since_time.is_none());
+    }
+
+    #[test]
+    fn parse_since_time_accepts_rfc3339() {
+        parse_since_time("2024-03-15T10:30:45Z").unwrap();
+        assert!(parse_since_time("not-a-time").is_err());
+        assert!(parse_since_time("").is_err());
     }
 }
