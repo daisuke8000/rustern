@@ -15,6 +15,7 @@ pub mod ext_json_renderer;
 pub(crate) mod highlight;
 pub mod json_renderer;
 pub mod raw_renderer;
+pub(crate) mod setup;
 
 pub trait LineFormatter: Send + Sync + 'static {
     fn format_line(&self, event: &LogEvent) -> String;
