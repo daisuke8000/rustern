@@ -32,13 +32,13 @@ fn format_wall_prefix(
         TimestampStyle::Omit => return None,
         TimestampStyle::EpochSeconds => dt_utc.timestamp().to_string(),
         TimestampStyle::Rfc3339 => match zone {
-            TimestampZone::Utc => dt_utc.to_rfc3339_opts(SecondsFormat::AutoSi, false),
+            TimestampZone::Utc => dt_utc.to_rfc3339_opts(SecondsFormat::Nanos, false),
             TimestampZone::Local => dt_utc
                 .with_timezone(&Local)
-                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
+                .to_rfc3339_opts(SecondsFormat::Nanos, false),
             TimestampZone::Iana(tz) => dt_utc
                 .with_timezone(&tz)
-                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
+                .to_rfc3339_opts(SecondsFormat::Nanos, false),
         },
         TimestampStyle::SternShort => match zone {
             TimestampZone::Utc => dt_utc.format("%m-%d %H:%M:%S").to_string(),
@@ -108,7 +108,7 @@ mod tests {
     use super::*;
     use crate::render::{RenderCommand, render_task};
     use crate::source::{ContextName, Labels, SourceKind, SourceMeta};
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, duplex};
     use tokio::sync::mpsc;
@@ -183,6 +183,14 @@ mod tests {
             "container segment should be plain"
         );
         assert!(out.contains("hello"));
+    }
+
+    #[test]
+    fn default_timestamp_uses_rfc3339_nano() {
+        let dt = Utc.with_ymd_and_hms(2024, 3, 15, 10, 30, 45).unwrap();
+        let prefix = format_wall_prefix(&dt, TimestampStyle::Rfc3339, TimestampZone::Utc).unwrap();
+        assert!(prefix.contains('.'));
+        assert!(prefix.ends_with('Z') || prefix.contains("+00:00"));
     }
 
     #[tokio::test]

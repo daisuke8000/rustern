@@ -106,15 +106,16 @@ impl Cli {
         let since = self.since.as_deref().map(parse_since).transpose()?;
 
         let timestamp_style = match self.timestamps {
-            TimestampArg::Omit => TimestampStyle::Omit,
-            TimestampArg::Default => TimestampStyle::Rfc3339,
-            TimestampArg::Short => TimestampStyle::SternShort,
-            TimestampArg::Epoch => TimestampStyle::EpochSeconds,
+            None => TimestampStyle::Omit,
+            Some(TimestampArg::Omit) => TimestampStyle::Omit,
+            Some(TimestampArg::Default) => TimestampStyle::Rfc3339,
+            Some(TimestampArg::Short) => TimestampStyle::SternShort,
+            Some(TimestampArg::Epoch) => TimestampStyle::EpochSeconds,
         };
 
         let timestamp_zone = match self.timezone.as_deref() {
             Some(z) => TimestampZone::parse_arg(z)?,
-            None => TimestampZone::Utc,
+            None => TimestampZone::Local,
         };
 
         let resolved_max = self
@@ -289,7 +290,7 @@ mod tests {
         assert!(matches!(
             cfg.formatter,
             FormatterChoice::Default {
-                timestamp_style: TimestampStyle::Rfc3339,
+                timestamp_style: TimestampStyle::Omit,
                 ..
             }
         ));
@@ -382,6 +383,51 @@ mod tests {
         assert_eq!(cfg.filter_on, FilterOn::Transformed);
         assert_eq!(cfg.json_query_mode, QueryMode::Append);
         assert_eq!(cfg.json_query.as_deref(), Some(".msg"));
+    }
+
+    #[test]
+    fn omits_timestamps_by_default() {
+        let cli = Cli::try_parse_from(["rstn", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                timestamp_style: TimestampStyle::Omit,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn maps_bare_timestamps_flag_to_stern_default() {
+        let cli = Cli::try_parse_from(["rstn", "q", "-t"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                timestamp_style: TimestampStyle::Rfc3339,
+                timestamp_zone: TimestampZone::Local,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn maps_timestamps_short_and_timezone() {
+        let cli =
+            Cli::try_parse_from(["rstn", "--timestamps=short", "--timezone", "UTC", "q"]).unwrap();
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert!(matches!(
+            cfg.formatter,
+            FormatterChoice::Default {
+                timestamp_style: TimestampStyle::SternShort,
+                timestamp_zone: TimestampZone::Utc,
+                ..
+            }
+        ));
     }
 
     #[test]

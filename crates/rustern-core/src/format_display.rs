@@ -6,7 +6,7 @@ use std::str::FromStr;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TimestampStyle {
     Omit,
-    /// RFC 3339 with zone offset (`chrono` resolves subseconds when present).
+    /// RFC 3339 with nanosecond precision (stern `--timestamps=default`).
     Rfc3339,
     /// Compact `MM-DD HH:MM:SS` in [`TimestampZone`] (stern-inspired).
     SternShort,
