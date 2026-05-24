@@ -396,8 +396,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         metrics_rep.cumulative_reporter(rep_token).await;
     });
 
-    let render_cap = 128usize;
-    let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(render_cap);
+    let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(cfg.fwd.render_channel_capacity());
     let flush_token = cfg.root_token.clone();
     let flush_tx = render_tx.clone();
     tokio::spawn(flush_ticker(
