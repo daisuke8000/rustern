@@ -5,15 +5,21 @@
 //! | [`config`] | `CoreRunConfig`, formatter choice, errors/results |
 //! | [`forward`] | `LossyMetrics`, `forward_to_render`, log concurrency semaphore |
 //! | [`pipeline`] | Pipeline stages on the `run` stream (`apply_pipeline`) |
-//! | [`runner`] | `run` — watch, channels, `tokio::spawn` wiring |
+//! | [`run`] | `run` — watch, channels, `tokio::spawn` wiring |
+//! | [`watch`] | Pod watch loop and reconcile handlers |
+//! | [`attach`] | Pod log stream attach |
+//! | [`mux`] | `StreamMap` multiplexing |
 
+mod attach;
 mod config;
 mod forward;
+mod mux;
 mod pipeline;
-mod runner;
+mod run;
+mod watch;
 
 pub use config::{
     CoreRunConfig, FormatterChoice, OutputMode, RunError, RunOutcome, RuntimeFwdConfig,
 };
 pub use forward::{LossyMetrics, build_log_request_semaphore, forward_to_render};
-pub use runner::run;
+pub use run::run;
