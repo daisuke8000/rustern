@@ -12,7 +12,7 @@ use crate::source::LogEvent;
 
 pub mod default_renderer;
 pub mod ext_json_renderer;
-pub(crate) mod highlight;
+pub mod highlight;
 pub mod json_renderer;
 pub mod raw_renderer;
 pub(crate) mod setup;
