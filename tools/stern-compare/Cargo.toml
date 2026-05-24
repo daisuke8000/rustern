@@ -1,0 +1,15 @@
+[package]
+name = "stern-compare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Manual soak harness comparing rstn vs stern CPU/RSS in follow mode"
+
+[[bin]]
+name = "stern-compare"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }

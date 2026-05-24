@@ -39,3 +39,14 @@ Behavior is tracked against [stern](https://github.com/stern/stern); not every f
 - **`--exit-on REGEX`** (repeatable): exit code **1** on first raw log line matching any pattern (evaluated **before** `-i`/`-e`, so hidden lines still trigger exit). Useful for CI/smoke.
 - **`--exit-on-level LEVEL`**: exit code **1** when classified log level is **at or above** `LEVEL` (`trace` < `debug` < `info` < `warn` < `error`). Uses `--level-key` when set; works with follow and one-shot.
 
+## Performance comparison (optional, manual)
+
+Compare **rstn** vs **stern** on the same namespace/selector in follow mode with the [`stern-compare`](tools/stern-compare/README.md) workspace tool. Requires a live cluster; not run in CI.
+
+```bash
+cargo run -p stern-compare -- print -n default -l app=demo --seconds 30
+cargo run --release -p stern-compare -- run -n default -l app=demo --seconds 30
+```
+
+Uses [hyperfine](https://github.com/sharkdp/hyperfine) or `/usr/bin/time` + `ps` RSS sampling — see the tool README for details.
+
