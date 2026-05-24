@@ -5,9 +5,7 @@ use tokio_util::sync::CancellationToken;
 use super::mux::MuxCmd;
 use super::watch::PodWatchCtx;
 use crate::source::pod_log::PodLogSource;
-use crate::source::{
-    ContextName, Labels, LogSource, SourceKey, SourceKind, SourceMeta,
-};
+use crate::source::{ContextName, Labels, LogSource, SourceKey, SourceKind, SourceMeta};
 
 struct AttachPodLogParams {
     ctx: Arc<PodWatchCtx>,
