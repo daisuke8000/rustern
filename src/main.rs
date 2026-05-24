@@ -13,8 +13,15 @@ const SHUTDOWN_NONE: u8 = 0;
 const SHUTDOWN_SIGINT: u8 = 1;
 const SHUTDOWN_SIGTERM: u8 = 2;
 
+fn install_crypto_provider() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    install_crypto_provider();
     report::install_hook();
 
     let cli = cli::Cli::parse();
