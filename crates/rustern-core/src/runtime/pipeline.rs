@@ -50,11 +50,22 @@ where
     } = stages;
 
     let has_exit_msg = !exit_on.is_empty();
+    let defer_include = filter_on == FilterOn::Original && exit_on_level.is_some();
 
     let mut s: BoxStream<'static, Result<LogEvent, LogSourceError>> =
         if filter_on == FilterOn::Original {
-            if has_exit_msg {
-                let s = exit_watch_message(stream, exit_on, exit_watch.clone());
+            let s: BoxStream<'static, Result<LogEvent, LogSourceError>> = if has_exit_msg {
+                Box::pin(exit_watch_message(stream, exit_on, exit_watch.clone()))
+            } else {
+                Box::pin(stream)
+            };
+            if defer_include {
+                Box::pin(container_filter(
+                    s,
+                    container_incl.clone(),
+                    container_excl.clone(),
+                ))
+            } else if has_exit_msg {
                 let s = include_exclude(s, includes.clone(), excludes.clone());
                 Box::pin(container_filter(
                     s,
@@ -62,7 +73,7 @@ where
                     container_excl.clone(),
                 ))
             } else {
-                let s = include_exclude(stream, includes.clone(), excludes.clone());
+                let s = include_exclude(s, includes.clone(), excludes.clone());
                 Box::pin(container_filter(
                     s,
                     container_incl.clone(),
@@ -91,7 +102,7 @@ where
         s
     };
 
-    s = if filter_on == FilterOn::Transformed {
+    s = if filter_on == FilterOn::Transformed || defer_include {
         Box::pin(include_exclude(s, includes, excludes))
     } else {
         s
@@ -161,6 +172,42 @@ mod tests {
         assert!(
             token.is_cancelled(),
             "exit-on still triggers on hidden line"
+        );
+    }
+
+    #[tokio::test]
+    async fn exit_on_level_fires_before_include_filter() {
+        use crate::source::LogLevel;
+        use serde_json::value::RawValue;
+
+        let token = CancellationToken::new();
+        let raw = r#"{"level":"error","msg":"hidden"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(RawValue::from_string(raw.to_string()).unwrap());
+
+        let stages = PipelineStages {
+            container_incl: Regex::new(".*").unwrap(),
+            container_excl: vec![],
+            includes: vec![Regex::new("visible").unwrap()],
+            excludes: vec![],
+            filter_on: FilterOn::Original,
+            jq: None,
+            level_key: Some("level".into()),
+            color_assign: ColorAssignOpts {
+                pod_colors: false,
+                container_colors: false,
+                diff_container: false,
+            },
+            exit_on: vec![],
+            exit_on_level: Some(ExitOnLevel::Warn),
+            exit_watch: ExitWatchState::new(token.clone()),
+        };
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        assert!(out.is_empty(), "include filter hides the line from output");
+        assert!(
+            token.is_cancelled(),
+            "exit-on-level still triggers on hidden line"
         );
     }
 
