@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use serde_json::value::RawValue;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 pub mod pod_log;
@@ -74,7 +74,7 @@ pub struct LogEvent {
     pub source: Arc<SourceMeta>,
     pub timestamp: DateTime<Utc>,
     pub message: Arc<str>,
-    pub structured: Option<Box<RawValue>>,
+    pub structured: Option<Value>,
     pub level: Option<LogLevel>,
     /// Stable palette slot for pod-name highlighting.
     pub palette_index: Option<u8>,

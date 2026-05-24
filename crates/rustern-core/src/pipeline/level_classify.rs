@@ -1,5 +1,4 @@
 use futures::stream::{Stream, StreamExt};
-use serde_json::Value;
 
 use crate::source::{LogEvent, LogLevel, LogSourceError};
 
@@ -40,10 +39,7 @@ where
             let Some(ref ptr) = path else {
                 return ev;
             };
-            let Some(ref rv) = ev.structured else {
-                return ev;
-            };
-            let Ok(v) = serde_json::from_str::<Value>(rv.get()) else {
+            let Some(ref v) = ev.structured else {
                 return ev;
             };
             if let Some(lv) = v.pointer(ptr).and_then(|x| x.as_str()) {
@@ -59,7 +55,6 @@ mod tests {
     use super::*;
     use crate::source::{ContextName, Labels, SourceKind, SourceMeta};
     use chrono::Utc;
-    use serde_json::value::RawValue;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -78,7 +73,7 @@ mod tests {
             }),
             timestamp: Utc::now(),
             message: Arc::from(raw),
-            structured: Some(RawValue::from_string(raw.to_string()).unwrap()),
+            structured: Some(serde_json::from_str(raw).unwrap()),
             level: None,
             palette_index: None,
             container_palette_index: None,

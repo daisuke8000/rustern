@@ -81,13 +81,13 @@ where
         async move {
             match r {
                 Ok(mut ev) => {
-                    let Some(rv) = ev.structured.as_ref() else {
+                    let Some(v) = ev.structured.as_ref() else {
                         return match mode {
                             QueryMode::Filter => None,
                             _ => Some(Ok(ev)),
                         };
                     };
-                    let value: Val = match serde_json::from_str(rv.get()) {
+                    let value: Val = match serde_json::from_value(v.clone()) {
                         Ok(v) => v,
                         Err(_) => return Some(Ok(ev)),
                     };
@@ -135,7 +135,6 @@ mod tests {
     use super::*;
     use crate::source::{ContextName, Labels, SourceKind, SourceMeta};
     use chrono::Utc;
-    use serde_json::value::RawValue;
     use std::sync::Arc;
 
     fn ev_json(raw: &str) -> LogEvent {
@@ -152,7 +151,7 @@ mod tests {
             }),
             timestamp: Utc::now(),
             message: Arc::from(raw),
-            structured: Some(RawValue::from_string(raw.to_string()).unwrap()),
+            structured: Some(serde_json::from_str(raw).unwrap()),
             level: None,
             palette_index: None,
             container_palette_index: None,

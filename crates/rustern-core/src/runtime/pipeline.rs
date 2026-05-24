@@ -170,13 +170,10 @@ mod tests {
 
     #[tokio::test]
     async fn exit_on_level_fires_before_include_filter() {
-        use crate::source::LogLevel;
-        use serde_json::value::RawValue;
-
         let token = CancellationToken::new();
         let raw = r#"{"level":"error","msg":"hidden"}"#;
         let mut event = ev(raw);
-        event.structured = Some(RawValue::from_string(raw.to_string()).unwrap());
+        event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
             container_incl: Regex::new(".*").unwrap(),
@@ -207,12 +204,10 @@ mod tests {
     #[tokio::test]
     async fn exit_on_level_triggers_after_classify() {
         use crate::source::LogLevel;
-        use serde_json::value::RawValue;
-
         let token = CancellationToken::new();
         let raw = r#"{"level":"error","msg":"boom"}"#;
         let mut event = ev(raw);
-        event.structured = Some(RawValue::from_string(raw.to_string()).unwrap());
+        event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
             container_incl: Regex::new(".*").unwrap(),
