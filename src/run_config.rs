@@ -184,6 +184,12 @@ impl Cli {
                 JqModeArg::Append => QueryMode::Append,
             },
             level_key: self.level_key.clone(),
+            exit_on: self.exit_on.clone(),
+            exit_on_level: self
+                .exit_on_level
+                .as_deref()
+                .map(rustern_core::pipeline::ExitOnLevel::parse)
+                .transpose()?,
             output: output_and_formatter.0,
             formatter: output_and_formatter.1,
             diff_container: self.diff_container,
@@ -458,6 +464,18 @@ users:
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn maps_exit_on_flags() {
+        let cli = cli_with_default_ns(&["--exit-on", "ERR", "--exit-on-level", "error", "q"]);
+        cli.validate().unwrap();
+        let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+        assert_eq!(cfg.exit_on, vec!["ERR".to_string()]);
+        assert_eq!(
+            cfg.exit_on_level,
+            Some(rustern_core::pipeline::ExitOnLevel::Error)
+        );
     }
 
     #[test]

@@ -107,6 +107,10 @@ pub struct CoreRunConfig {
     pub json_query_mode: QueryMode,
     /// Structured field path used for inferred log level tagging.
     pub level_key: Option<String>,
+    /// CI/smoke: exit when raw message matches any regex (before `-i`/`-e`).
+    pub exit_on: Vec<String>,
+    /// CI/smoke: exit when classified log level is at or above this threshold.
+    pub exit_on_level: Option<crate::pipeline::ExitOnLevel>,
     /// Output family (default/raw/json skeleton).
     pub output: OutputMode,
     /// Concrete formatter knobs.
@@ -136,6 +140,8 @@ pub enum RunError {
     Kube(#[from] kube::Error),
     #[error("{0}")]
     Other(String),
+    #[error("--exit-on / --exit-on-level condition matched")]
+    ExitOnTriggered,
 }
 
 /// High-level outcome after [`crate::run`] returns (streaming ended cooperatively).

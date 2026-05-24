@@ -20,6 +20,7 @@ use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use super::watch::{PodWatchCtx, spawn_watch_task};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
 use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
+use crate::pipeline::ExitWatchState;
 use crate::pipeline::validate_filter;
 use crate::render::setup::{RenderSetupError, build_line_formatter, color_assign_opts};
 use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
@@ -102,6 +103,10 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         .collect::<Result<_, _>>()
         .map_err(|e| RunError::Other(format!("invalid exclude-pod regex: {e}")))?;
 
+    let exit_on = compile_list(&cfg.exit_on)
+        .map_err(|e| RunError::Other(format!("invalid --exit-on regex: {e}")))?;
+    let exit_watch = ExitWatchState::new(cfg.root_token.clone());
+
     let (api, allowed_ns): (Api<Pod>, Option<HashSet<String>>) = if cfg.all_namespaces {
         (Api::all(client.clone()), None)
     } else if cfg.namespaces.len() == 1 {
@@ -170,6 +175,9 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
             jq: jq.clone(),
             level_key: cfg.level_key.clone(),
             color_assign: color_assign_opts(&cfg.formatter, cfg.diff_container),
+            exit_on,
+            exit_on_level: cfg.exit_on_level,
+            exit_watch: exit_watch.clone(),
         },
         render_tx.clone(),
         cfg.fwd.clone(),
@@ -228,6 +236,10 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         return Err(RunError::Other(
             "max concurrent log streams reached (--max-log-requests)".into(),
         ));
+    }
+
+    if exit_watch.triggered() {
+        return Err(RunError::ExitOnTriggered);
     }
 
     Ok(RunOutcome {
