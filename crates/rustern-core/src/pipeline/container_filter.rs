@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use futures::stream::{Stream, StreamExt};
 use regex::Regex;
 
@@ -12,9 +14,11 @@ pub fn container_filter<S>(
 where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
 {
+    let include = Arc::new(include);
+    let exclude: Arc<[Regex]> = exclude.into();
     inner.filter_map(move |r| {
-        let include = include.clone();
-        let exclude = exclude.clone();
+        let include = Arc::clone(&include);
+        let exclude = Arc::clone(&exclude);
         async move {
             match r {
                 Ok(ev) => {
