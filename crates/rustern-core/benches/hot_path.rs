@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use futures::stream::{self, StreamExt};
 use regex::Regex;
@@ -49,7 +49,7 @@ fn sample_event(message: &str) -> LogEvent {
             labels: Arc::new(Labels::default()),
             uid: "uid-bench".into(),
         }),
-        timestamp: Utc::now(),
+        timestamp: Utc.with_ymd_and_hms(2024, 3, 15, 10, 30, 45).unwrap(),
         message: Arc::from(message),
         structured: None,
         level: None,
@@ -58,8 +58,8 @@ fn sample_event(message: &str) -> LogEvent {
     }
 }
 
-fn event_batch(message: &str) -> Vec<Result<LogEvent, LogSourceError>> {
-    (0..BATCH).map(|_| Ok(sample_event(message))).collect()
+fn event_batch(message: &str) -> Vec<LogEvent> {
+    (0..BATCH).map(|_| sample_event(message)).collect()
 }
 
 fn bench_include_exclude(c: &mut Criterion) {
@@ -71,16 +71,20 @@ fn bench_include_exclude(c: &mut Criterion) {
         ("plain_256", plain_message_256()),
         ("json_4k", json_message_4k()),
     ] {
+        let batch = event_batch(&msg);
         let includes = vec![Regex::new("error|warn|GET").unwrap()];
         let excludes = vec![Regex::new("healthz").unwrap()];
 
-        group.bench_with_input(BenchmarkId::new("filter", name), &msg, |b, msg| {
+        group.bench_with_input(BenchmarkId::new("filter", name), &batch, |b, batch| {
             b.iter(|| {
-                let out = rt.block_on(async {
+                let events = batch.clone();
+                let includes = includes.clone();
+                let excludes = excludes.clone();
+                let out = rt.block_on(async move {
                     include_exclude(
-                        stream::iter(event_batch(msg)),
-                        includes.clone(),
-                        excludes.clone(),
+                        stream::iter(events.into_iter().map(Ok::<_, LogSourceError>)),
+                        includes,
+                        excludes,
                     )
                     .collect::<Vec<_>>()
                     .await
@@ -97,17 +101,20 @@ fn bench_container_filter(c: &mut Criterion) {
     let mut group = c.benchmark_group("container_filter");
     group.throughput(Throughput::Elements(BATCH));
 
-    let msg = plain_message_256();
+    let batch = event_batch(&plain_message_256());
     let include = Regex::new("app|sidecar").unwrap();
     let excludes = vec![Regex::new("istio-proxy").unwrap()];
 
     group.bench_function("filter", |b| {
         b.iter(|| {
-            let out = rt.block_on(async {
+            let events = batch.clone();
+            let include = include.clone();
+            let excludes = excludes.clone();
+            let out = rt.block_on(async move {
                 container_filter(
-                    stream::iter(event_batch(&msg)),
-                    include.clone(),
-                    excludes.clone(),
+                    stream::iter(events.into_iter().map(Ok::<_, LogSourceError>)),
+                    include,
+                    excludes,
                 )
                 .collect::<Vec<_>>()
                 .await
@@ -123,16 +130,18 @@ fn bench_json_pipeline(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_pipeline");
     group.throughput(Throughput::Elements(BATCH));
 
-    let json_msg = json_message_4k();
+    let batch = event_batch(&json_message_4k());
     let jq = validate_filter(".msg").expect("jq compile");
 
     group.bench_function("annotate_classify_jq", |b| {
         b.iter(|| {
-            let out = rt.block_on(async {
-                let s = stream::iter(event_batch(&json_msg));
+            let events = batch.clone();
+            let jq = jq.clone();
+            let out = rt.block_on(async move {
+                let s = stream::iter(events.into_iter().map(Ok::<_, LogSourceError>));
                 let s = json_annotate(s);
                 let s = level_classify(s, Some("level".into()));
-                let s = jq_evaluate(s, jq.clone(), QueryMode::Filter);
+                let s = jq_evaluate(s, jq, QueryMode::Filter);
                 s.collect::<Vec<_>>().await
             });
             black_box(out);

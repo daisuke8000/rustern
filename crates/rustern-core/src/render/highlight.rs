@@ -6,6 +6,7 @@ use regex::Regex;
 use super::LineFormatter;
 use crate::source::LogEvent;
 
+/// Wraps a line formatter and applies stern-style bold-red emphasis to regex matches.
 pub struct SternHighlightLineFormatter {
     inner: Arc<dyn LineFormatter>,
     re: Regex,
