@@ -6,13 +6,13 @@ use regex::Regex;
 use super::LineFormatter;
 use crate::source::LogEvent;
 
-pub(crate) struct SternHighlightLineFormatter {
+pub struct SternHighlightLineFormatter {
     inner: Arc<dyn LineFormatter>,
     re: Regex,
 }
 
 impl SternHighlightLineFormatter {
-    pub(crate) fn new(inner: Arc<dyn LineFormatter>, re: Regex) -> Self {
+    pub fn new(inner: Arc<dyn LineFormatter>, re: Regex) -> Self {
         Self { inner, re }
     }
 }
@@ -39,7 +39,7 @@ fn highlight_default_line(text: &str, re: &Regex) -> String {
 
 /// Stern merges `--include` and `--highlight`, sorts alternation segments by descending pattern-string
 /// length, and wraps matched spans in bold-red style.
-pub(crate) fn compile_stern_highlight_regex(
+pub fn compile_stern_highlight_regex(
     includes: &[String],
     highlights: &[String],
 ) -> Result<Option<Regex>, regex::Error> {

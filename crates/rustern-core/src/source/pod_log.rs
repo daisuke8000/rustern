@@ -106,7 +106,7 @@ impl PodLogSource {
                     _ = token.cancelled() => None,
                     line = lines.next() => match line {
                         Some(Ok(raw)) => {
-                            let (ts, msg) = parse_timestamp(&raw);
+                            let (ts, msg) = parse_log_line(&raw);
                             let ev = LogEvent {
                                 source: meta.clone(),
                                 timestamp: ts,
@@ -163,7 +163,8 @@ async fn log_stream_with_retry(
     }
 }
 
-fn parse_timestamp(raw: &str) -> (DateTime<Utc>, String) {
+/// Parse a kube log line with an optional RFC3339 prefix into `(timestamp, message)`.
+pub fn parse_log_line(raw: &str) -> (DateTime<Utc>, String) {
     if let Some((ts_s, msg)) = raw.split_once(' ')
         && let Ok(ts) = DateTime::parse_from_rfc3339(ts_s)
     {
