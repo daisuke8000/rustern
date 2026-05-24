@@ -174,6 +174,14 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub level_key: Option<String>,
 
+    /// Exit with code 1 when raw message matches regex (repeatable; rustern-plus; before `-i`/`-e`)
+    #[arg(long = "exit-on", value_name = "REGEX", action = clap::ArgAction::Append)]
+    pub exit_on: Vec<String>,
+
+    /// Exit with code 1 when log level is at or above LEVEL (rustern-plus; after level classify)
+    #[arg(long = "exit-on-level", value_name = "LEVEL")]
+    pub exit_on_level: Option<String>,
+
     /// Line format
     #[arg(long, value_enum, default_value_t = FormatArg::Default)]
     pub format: FormatArg,
@@ -363,6 +371,12 @@ impl Cli {
         }
         for p in &self.highlight {
             Regex::new(p).map_err(|e| format!("invalid --highlight regex: {e}"))?;
+        }
+        for p in &self.exit_on {
+            Regex::new(p).map_err(|e| format!("invalid --exit-on regex: {e}"))?;
+        }
+        if let Some(ref lv) = self.exit_on_level {
+            rustern_core::pipeline::ExitOnLevel::parse(lv)?;
         }
         if self.condition.is_some() && self.follow() && self.tail != Some(0) {
             return Err("--condition only works with --no-follow or --tail=0".into());
@@ -593,6 +607,26 @@ mod tests {
     fn validate_accepts_field_selector_without_query() {
         let cli = cli_with_default_ns(&["--field-selector", "metadata.name=foo"]);
         cli.validate().unwrap();
+    }
+
+    #[test]
+    fn exit_on_flags_parse() {
+        let cli = cli_with_default_ns(&["--exit-on", "panic", "--exit-on-level", "warn", "q"]);
+        cli.validate().unwrap();
+        assert_eq!(cli.exit_on, vec!["panic".to_string()]);
+        assert_eq!(cli.exit_on_level.as_deref(), Some("warn"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_exit_on_regex() {
+        let cli = cli_with_default_ns(&["--exit-on", "(unclosed", "q"]);
+        assert!(cli.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_exit_on_level() {
+        let cli = cli_with_default_ns(&["--exit-on-level", "bogus", "q"]);
+        assert!(cli.validate().is_err());
     }
 
     #[test]

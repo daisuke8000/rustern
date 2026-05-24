@@ -34,3 +34,8 @@ Behavior is tracked against [stern](https://github.com/stern/stern); not every f
 7. **`--only-log-lines`**: stern suppresses +/- attach banners on stderr; rustern does not emit equivalents yet—the flag stays for parity and only logs at debug level internally.
 8. **`kind/name` pod selection** (stern parity): supported kinds are `pod`, `replicationcontroller`, `service`, `daemonset`, `deployment`, `replicaset`, `statefulset`, and `job` (short aliases such as `deploy`, `rs`, `ds`, `sts`, `svc`, `rc`, `po` work too). For a **single** namespace, rustern **`GET`s** the workload and builds the label selector from its spec (including `matchExpressions`). With **multiple `-n` values**, it resolves per namespace and uses the common selector when they agree; otherwise it falls back to **`app=<name>`**. With **`-A` / `--all-namespaces`**, selectors can differ per namespace, so rustern always uses the legacy **`app=<name>`** fallback. Not supported today: `cronjob`, `horizontalpodautoscaler`, and other controller kinds stern does not list either.
 
+## rustern-plus (not in stern)
+
+- **`--exit-on REGEX`** (repeatable): exit code **1** on first raw log line matching any pattern (evaluated **before** `-i`/`-e`, so hidden lines still trigger exit). Useful for CI/smoke.
+- **`--exit-on-level LEVEL`**: exit code **1** when classified log level is **at or above** `LEVEL` (`trace` < `debug` < `info` < `warn` < `error`). Uses `--level-key` when set; works with follow and one-shot.
+
