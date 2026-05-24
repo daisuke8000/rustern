@@ -29,3 +29,4 @@ install-local: release
 uninstall:
 	-$(CARGO) uninstall rustern
 	-rm -f "$(INSTALL_DIR)/$(BIN)"
+
