@@ -380,7 +380,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
 
     let sem = build_log_request_semaphore(cfg.fwd.max_log_requests);
 
-    let mut follow_lim: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)> = if cfg.follow {
+    let mut follow_lim: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)> = if cfg.pod_log.follow {
         Some(mpsc::channel(1))
     } else {
         None
@@ -449,13 +449,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         exclude_pod,
         client,
         root_child: cfg.root_token.clone(),
-        pod_log: PodLogRequest {
-            follow: cfg.follow,
-            tail: cfg.tail,
-            since_seconds: cfg.since,
-            since_time: cfg.since_time,
-            previous: cfg.previous,
-        },
+        pod_log: cfg.pod_log.clone(),
         sem,
         mux_tx: mux_tx.clone(),
         follow_limit_notifier,

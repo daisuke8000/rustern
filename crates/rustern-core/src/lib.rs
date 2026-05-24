@@ -15,3 +15,4 @@ pub use runtime::{
     CoreRunConfig, FormatterChoice, LossyMetrics, OutputMode, RunError, RunOutcome,
     RuntimeFwdConfig, build_log_request_semaphore, forward_to_render, run,
 };
+pub use source::pod_log::PodLogRequest;
