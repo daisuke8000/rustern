@@ -1,6 +1,26 @@
 # rustern
 Kubernetes multi pod and container log tailing in Rust inspired by the original stern
 
+## Install
+
+Requires Rust **1.88+** (`rust-version` in `Cargo.toml`).
+
+```bash
+make release        # → target/release/rstn
+make install        # → ~/.cargo/bin/rstn
+make install-local  # → ~/.local/bin/rstn
+```
+
+Verify: `rstn --version`
+
+Ensure `~/.cargo/bin` (or your install dir) is on `PATH`:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Uninstall: `make uninstall`
+
 ## Stern alignment (spec summary)
 
 Behavior is tracked against [stern](https://github.com/stern/stern); not every flag matches yet.

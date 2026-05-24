@@ -38,6 +38,7 @@ miette = { version = "7.6", features = ["fancy"] }
 humantime = "2"
 chrono-tz = "0.10"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [package]
 name = "rustern"
@@ -59,6 +60,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 miette = { workspace = true }
 humantime = { workspace = true }
+rustls = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.2.1"
