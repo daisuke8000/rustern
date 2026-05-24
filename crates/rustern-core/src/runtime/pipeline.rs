@@ -65,13 +65,6 @@ where
                     container_incl.clone(),
                     container_excl.clone(),
                 ))
-            } else if has_exit_msg {
-                let s = include_exclude(s, includes.clone(), excludes.clone());
-                Box::pin(container_filter(
-                    s,
-                    container_incl.clone(),
-                    container_excl.clone(),
-                ))
             } else {
                 let s = include_exclude(s, includes.clone(), excludes.clone());
                 Box::pin(container_filter(
