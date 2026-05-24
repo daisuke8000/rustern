@@ -20,6 +20,12 @@ pub struct RuntimeFwdConfig {
     pub max_log_requests: usize,
 }
 
+impl RuntimeFwdConfig {
+    pub(crate) fn render_channel_capacity(&self) -> usize {
+        self.buffer_size.max(1)
+    }
+}
+
 /// High-level stdout rendering mode (`run` selects a formatter from this plus [`FormatterChoice`]).
 #[derive(Debug, Clone)]
 pub enum OutputMode {
@@ -136,4 +142,29 @@ pub enum RunError {
 pub struct RunOutcome {
     /// Currently always `false` (reserved for future error aggregation).
     pub had_source_errors: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_channel_capacity_matches_buffer_size() {
+        let fwd = RuntimeFwdConfig {
+            buffer_size: 8192,
+            lossy: false,
+            max_log_requests: 10,
+        };
+        assert_eq!(fwd.render_channel_capacity(), 8192);
+    }
+
+    #[test]
+    fn render_channel_capacity_clamps_zero_to_one() {
+        let fwd = RuntimeFwdConfig {
+            buffer_size: 0,
+            lossy: false,
+            max_log_requests: 10,
+        };
+        assert_eq!(fwd.render_channel_capacity(), 1);
+    }
 }
