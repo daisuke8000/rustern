@@ -1,5 +1,4 @@
 use futures::stream::{Stream, StreamExt};
-use serde_json::value::RawValue;
 
 use crate::source::{LogEvent, LogSourceError};
 
@@ -10,9 +9,9 @@ where
     inner.map(|r| {
         r.map(|mut ev| {
             if ev.message.trim_start().starts_with('{')
-                && let Ok(rv) = RawValue::from_string(ev.message.to_string())
+                && let Ok(v) = serde_json::from_str(ev.message.as_ref())
             {
-                ev.structured = Some(rv);
+                ev.structured = Some(v);
             }
             ev
         })
