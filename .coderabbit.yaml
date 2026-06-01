@@ -1,7 +1,4 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-#
-# auto_review.base_branches: empty [] reviews PRs targeting the repo default branch only.
-# https://docs.coderabbit.ai/configuration/auto-review#base_branches
 
 language: ja-JP
 
@@ -85,7 +82,8 @@ reviews:
         - Prefer Result over unwrap/expect on production paths.
         - Idiomatic error types (thiserror); no new panics without strong justification.
         - Do not duplicate rustfmt/style feedback covered by CI.
-        - English comments only; no drive-by refactors unrelated to the PR.
+        - Source code comments must be in English; review comments should stay Japanese (language: ja-JP).
+        - No drive-by refactors unrelated to the PR.
 
     - path: ".github/workflows/**"
       instructions: |
