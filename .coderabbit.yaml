@@ -1,28 +1,157 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-#
-# reviews.auto_review.base_branches (公式):
-# - 空 [] のとき、マージ先が GitHub の「デフォルトブランチ」の PR が自動レビュー対象。
-# - 追加のパターンは「デフォルト以外でもレビューしたいマージ先」だけ列挙する（例: develop）。
-#   https://docs.coderabbit.ai/configuration/auto-review#base_branches
 
 language: ja-JP
 
+tone_instructions: "簡潔に。重大度を明示。rustfmt/スタイルの指摘は避け、正しさ・非同期・K8s・セキュリティを優先。"
+
 reviews:
-  profile: chill
+  profile: assertive
   poem: false
+  review_details: false
+  fail_commit_status: true
+  in_progress_fortune: false
+  suggested_labels: false
+  suggested_reviewers: false
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+
+  instructions: |
+    rustern: multi-pod Kubernetes log tailer; stern/kubectl behavioral parity is the north star.
+    Read .github/copilot-instructions.md for full standards.
+    Do not comment on rustfmt/style already enforced in CI.
+    Prioritize correctness, async/cancellation, kube client usage, resource leaks, and parity regressions.
+    Review comments in Japanese; keep code identifiers and API names in English.
+
+  path_filters:
+    - "!target/**"
+
+  path_instructions:
+    - path: "crates/rustern-core/src/discovery/**"
+      instructions: |
+        Kubernetes discovery and pod watching:
+        - Watch gaps, stale cache, and reconcile correctness when pods/containers change.
+        - Namespace and label/field selector behavior must match stern/kubectl parity expectations.
+        - Handle kube API errors without panicking; avoid unbounded retries.
+        - Flag RBAC-sensitive assumptions and cross-namespace leaks.
+
+    - path: "crates/rustern-core/src/runtime/**"
+      instructions: |
+        Runtime (attach, mux, watch, run):
+        - Cancellation and stream shutdown must not leak tasks or leave hung attaches.
+        - No blocking I/O inside async contexts; verify backpressure on multiplexed log streams.
+        - Race conditions when pods restart or containers churn.
+        - Prefer semantic bugs types alone will not catch.
+
+    - path: "crates/rustern-core/src/pipeline/**"
+      instructions: |
+        Log pipeline and filtering:
+        - Line handling, include/exclude, jq, and JSON annotation correctness.
+        - Behavior changes vs stern filtering semantics need explicit justification.
+        - Performance on hot paths (per-line allocations, regex reuse).
+
+    - path: "crates/rustern-core/src/source/**"
+      instructions: |
+        Log sources (pod logs):
+        - PodLogRequest / follow semantics and error paths.
+        - Compatibility with kube client streaming APIs.
+
+    - path: "src/cli/**"
+      instructions: |
+        CLI surface:
+        - Flag combinations and defaults must align with stern/kubectl parity (see run_defaults).
+        - Validation errors should be actionable; avoid breaking positional/query semantics.
+
+    - path: "src/run_defaults.rs"
+      instructions: |
+        Default resolution (pod query, namespaces, selectors):
+        - Changes here affect stern parity; require tests or documented parity rationale.
+        - Optional pod query with -l/--field-selector and context default namespace behavior.
+
+    - path: "src/run_config/**"
+      instructions: |
+        Run configuration assembly:
+        - Ensure resolved config matches CLI inputs and discovery expectations.
+
+    - path: "**/*.rs"
+      instructions: |
+        General Rust (rustern):
+        - Prefer Result over unwrap/expect on production paths.
+        - Idiomatic error types (thiserror); no new panics without strong justification.
+        - Do not duplicate rustfmt/style feedback covered by CI.
+        - Source code comments must be in English; review comments should stay Japanese (language: ja-JP).
+        - No drive-by refactors unrelated to the PR.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        CI workflows:
+        - GitHub Actions must use immutable commit SHAs, not floating @v tags.
+        - No secrets in logs; appropriate timeouts for test jobs.
+
+    - path: "**/Cargo.toml"
+      instructions: |
+        Workspace manifests:
+        - Dependency bumps need supply-chain rationale; kube/k8s-openapi versions affect API surface.
+        - Avoid unnecessary default-features expansion on kube.
+
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: warning
+      requirements: |
+        Use Conventional Commits (feat:, fix:, chore:, docs:, test:, refactor:).
+        Keep under 72 characters; be specific.
+    description:
+      mode: warning
+    issue_assessment:
+      mode: "off"
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    osvScanner:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    ast-grep:
+      essential_rules: true
+    clippy:
+      enabled: false
+
   auto_review:
-    enabled: true
-    drafts: false
-    auto_incremental_review: true
-    auto_pause_after_reviewed_commits: 5
-    base_branches: []
+    labels:
+      - "!skip-review"
     ignore_title_keywords:
       - "WIP"
       - "[skip review]"
     ignore_usernames:
       - "dependabot[bot]"
       - "renovate[bot]"
-    # デフォルト以外に統合ブランチがある場合のみ追加する（例）:
-    # base_branches:
-    #   - "develop"
-    #   - "release/.*"
+
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - ".github/copilot-instructions.md"
+  learnings:
+    scope: local
+  pull_requests:
+    scope: local
+  issues:
+    scope: local
