@@ -2,7 +2,11 @@
 //!
 //! CI uses a modest total line count (see [`load_scale`]). Set `RUSTERN_LOAD_LINES`
 //! locally (e.g. `50000` or `100000`) to exercise higher throughput.
+//!
+//! Every phase has a hard timeout so a scheduling deadlock fails fast instead of
+//! hanging the test runner.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,6 +25,8 @@ use rustern_core::source::{
     SourceKind, SourceMeta,
 };
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
@@ -28,7 +34,11 @@ const DEFAULT_CI_TOTAL_LINES: usize = 3_000;
 const DEFAULT_POD_COUNT: usize = 6;
 const RAW_MUX_BUFFER: usize = 4096;
 const BLOCKING_RENDER_BUFFER: usize = 4096;
-const CI_WALL_LIMIT: Duration = Duration::from_secs(30);
+const TEST_HARD_LIMIT: Duration = Duration::from_secs(20);
+const CONNECT_LIMIT: Duration = Duration::from_secs(8);
+const MUX_ADD_LIMIT: Duration = Duration::from_secs(3);
+const JOIN_LIMIT: Duration = Duration::from_secs(2);
+const LOSSY_OBSERVE: Duration = Duration::from_millis(1500);
 
 struct LoadScale {
     pods: usize,
@@ -47,6 +57,39 @@ fn load_scale() -> LoadScale {
         pods,
         lines_per_pod,
     }
+}
+
+fn recv_deadline() -> Duration {
+    let scale = load_scale();
+    let total = (scale.pods * scale.lines_per_pod) as u64;
+    Duration::from_millis(total.saturating_mul(2).clamp(2_000, 8_000))
+}
+
+async fn with_deadline<F, T>(label: &str, limit: Duration, f: F) -> T
+where
+    F: Future<Output = T>,
+{
+    timeout(limit, f)
+        .await
+        .unwrap_or_else(|_| panic!("{label} timed out after {limit:?}"))
+}
+
+async fn mux_add(mux_tx: &mpsc::Sender<MuxCmd>, key: SourceKey, stream: BoxedLogStream) {
+    match timeout(MUX_ADD_LIMIT, mux_tx.send(MuxCmd::Add(key, stream))).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => panic!("mux add channel closed"),
+        Err(_) => panic!("mux add timed out after {MUX_ADD_LIMIT:?}"),
+    }
+}
+
+async fn join_with_deadline<T>(label: &str, handle: JoinHandle<T>) -> T
+where
+    T: Send + 'static,
+{
+    timeout(JOIN_LIMIT, handle)
+        .await
+        .unwrap_or_else(|_| panic!("{label} join timed out after {JOIN_LIMIT:?}"))
+        .unwrap_or_else(|e| panic!("{label} task panicked: {e:?}"))
 }
 
 fn log_body(pod: &str, lines: usize) -> String {
@@ -91,40 +134,43 @@ async fn connect_mock_sources(
     pods: usize,
     token: CancellationToken,
 ) -> Vec<(SourceKey, BoxedLogStream)> {
-    let mut streams = Vec::with_capacity(pods);
-    for p in 0..pods {
-        let meta = SourceMeta {
-            context: ContextName("ctx".into()),
-            namespace: "ns".into(),
-            pod: format!("pod-{p}"),
-            container: "app".into(),
-            kind: SourceKind::PodLog,
-            node: None,
-            labels: Arc::new(Labels::default()),
-            uid: format!("uid-{p}"),
-        };
-        let client = kube::Client::new(mock.clone(), "default");
-        let source = PodLogSource::start(
-            client,
-            meta.clone(),
-            token.clone(),
-            PodLogRequest {
-                follow: false,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("pod log source");
-        let key = SourceKey {
-            context: meta.context.clone(),
-            namespace: meta.namespace.clone(),
-            pod: meta.pod.clone(),
-            container: meta.container.clone(),
-            uid: meta.uid.clone(),
-        };
-        streams.push((key, Box::new(source).into_stream()));
-    }
-    streams
+    with_deadline("connect_mock_sources", CONNECT_LIMIT, async move {
+        let mut streams = Vec::with_capacity(pods);
+        for p in 0..pods {
+            let meta = SourceMeta {
+                context: ContextName("ctx".into()),
+                namespace: "ns".into(),
+                pod: format!("pod-{p}"),
+                container: "app".into(),
+                kind: SourceKind::PodLog,
+                node: None,
+                labels: Arc::new(Labels::default()),
+                uid: format!("uid-{p}"),
+            };
+            let client = kube::Client::new(mock.clone(), "default");
+            let source = PodLogSource::start(
+                client,
+                meta.clone(),
+                token.clone(),
+                PodLogRequest {
+                    follow: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("pod log source");
+            let key = SourceKey {
+                context: meta.context.clone(),
+                namespace: meta.namespace.clone(),
+                pod: meta.pod.clone(),
+                container: meta.container.clone(),
+                uid: meta.uid.clone(),
+            };
+            streams.push((key, Box::new(source).into_stream()));
+        }
+        streams
+    })
+    .await
 }
 
 async fn count_render_lines(
@@ -133,10 +179,10 @@ async fn count_render_lines(
     fmt: Arc<DefaultLineFormatter>,
 ) -> u64 {
     let mut delivered = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(25);
+    let deadline = Instant::now() + recv_deadline();
     while delivered < expected && Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let cmd = match tokio::time::timeout(remaining, render_rx.recv()).await {
+        let cmd = match timeout(remaining, render_rx.recv()).await {
             Ok(Some(cmd)) => cmd,
             Ok(None) => break,
             Err(_) => break,
@@ -176,18 +222,15 @@ async fn run_mux_raw_load(pods: usize, lines_per_pod: usize) -> u64 {
     let mux_h = spawn_mux_task(mux_rx, raw_tx);
 
     for (key, stream) in streams {
-        mux_tx
-            .send(MuxCmd::Add(key, stream))
-            .await
-            .expect("mux add");
+        mux_add(&mux_tx, key, stream).await;
     }
 
     let expected = (pods * lines_per_pod) as u64;
     let mut got = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(25);
+    let deadline = Instant::now() + recv_deadline();
     while got < expected && Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match tokio::time::timeout(remaining, raw_rx.recv()).await {
+        match timeout(remaining, raw_rx.recv()).await {
             Ok(Some(Ok(_))) => got += 1,
             Ok(Some(Err(_))) | Ok(None) => break,
             Err(_) => break,
@@ -196,8 +239,8 @@ async fn run_mux_raw_load(pods: usize, lines_per_pod: usize) -> u64 {
 
     drop(mux_tx);
     token.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(5), mux_h).await;
-    server.await.unwrap();
+    let _ = timeout(JOIN_LIMIT, mux_h).await;
+    join_with_deadline("mock_log_server", server).await;
     got
 }
 
@@ -269,66 +312,78 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
         forward_token,
     ));
 
-    // Let forward/render tasks poll before mux backpressure can wedge stream registration.
     tokio::task::yield_now().await;
 
     for (key, stream) in streams {
-        mux_tx
-            .send(MuxCmd::Add(key, stream))
-            .await
-            .expect("mux add");
+        mux_add(&mux_tx, key, stream).await;
     }
 
     let delivered = if lossy {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        tokio::time::sleep(LOSSY_OBSERVE).await;
         0
     } else {
-        render_h
-            .expect("render task")
+        let render_h = render_h.expect("render task");
+        timeout(recv_deadline(), render_h)
             .await
+            .unwrap_or_else(|_| panic!("render count timed out after {:?}", recv_deadline()))
             .expect("render task panicked")
     };
 
     token.cancel();
     let _ = render_tx.send(RenderCommand::Shutdown).await;
-    let _ = tokio::time::timeout(Duration::from_secs(5), forward_h).await;
-    let _ = tokio::time::timeout(Duration::from_secs(5), mux_h).await;
-    server.await.unwrap();
+    let _ = timeout(JOIN_LIMIT, forward_h).await;
+    let _ = timeout(JOIN_LIMIT, mux_h).await;
+    join_with_deadline("mock_log_server", server).await;
 
     (delivered, metrics.drop_count())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mux_forwards_all_mock_pod_lines() {
-    let scale = load_scale();
-    let expected = (scale.pods * scale.lines_per_pod) as u64;
-    let started = Instant::now();
-    let got = run_mux_raw_load(scale.pods, scale.lines_per_pod).await;
-    assert_eq!(got, expected, "mux should forward every mock log line");
-    assert!(started.elapsed() < CI_WALL_LIMIT);
+    with_deadline("mux_forwards_all_mock_pod_lines", TEST_HARD_LIMIT, async {
+        let scale = load_scale();
+        let expected = (scale.pods * scale.lines_per_pod) as u64;
+        let got = run_mux_raw_load(scale.pods, scale.lines_per_pod).await;
+        assert_eq!(got, expected, "mux should forward every mock log line");
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn blocking_pipeline_renders_all_multistream_lines() {
-    let scale = load_scale();
-    let expected = (scale.pods * scale.lines_per_pod) as u64;
-    let started = Instant::now();
-    let (delivered, dropped) = run_pipeline_render_load(false, BLOCKING_RENDER_BUFFER).await;
-    assert_eq!(delivered, expected, "all lines should reach render");
-    assert_eq!(dropped, 0, "blocking mode must not drop");
-    assert!(started.elapsed() < CI_WALL_LIMIT);
+    with_deadline(
+        "blocking_pipeline_renders_all_multistream_lines",
+        TEST_HARD_LIMIT,
+        async {
+            let scale = load_scale();
+            let expected = (scale.pods * scale.lines_per_pod) as u64;
+            let (delivered, dropped) =
+                run_pipeline_render_load(false, BLOCKING_RENDER_BUFFER).await;
+            assert_eq!(delivered, expected, "all lines should reach render");
+            assert_eq!(dropped, 0, "blocking mode must not drop");
+        },
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lossy_drops_when_render_backpressured() {
-    let scale = load_scale();
-    let expected = (scale.pods * scale.lines_per_pod) as u64;
-    let started = Instant::now();
-    let (delivered, dropped) = run_pipeline_render_load(true, 4).await;
-    assert!(dropped > 0, "lossy mode with tiny render channel should drop events");
-    assert!(
-        delivered < expected,
-        "backpressure should prevent full delivery in lossy mode"
-    );
-    assert!(started.elapsed() < CI_WALL_LIMIT);
+    with_deadline(
+        "lossy_drops_when_render_backpressured",
+        TEST_HARD_LIMIT,
+        async {
+            let scale = load_scale();
+            let expected = (scale.pods * scale.lines_per_pod) as u64;
+            let (delivered, dropped) = run_pipeline_render_load(true, 4).await;
+            assert!(
+                dropped > 0,
+                "lossy mode with tiny render channel should drop events"
+            );
+            assert!(
+                delivered < expected,
+                "backpressure should prevent full delivery in lossy mode"
+            );
+        },
+    )
+    .await;
 }
