@@ -9,7 +9,9 @@ use rustern_core::discovery::pod_condition::parse_pod_condition;
 use rustern_core::discovery::pod_watcher::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
-use rustern_core::{CoreRunConfig, FormatterChoice, OutputMode, PodLogRequest, RuntimeFwdConfig};
+use rustern_core::{
+    CoreRunConfig, FormatterChoice, OutputMode, PodLogRequest, RuntimeFwdConfig, RuntimeStatsConfig,
+};
 use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 
 use crate::cli::{
@@ -196,6 +198,9 @@ impl Cli {
             fwd: RuntimeFwdConfig {
                 buffer_size: self.buffer_size,
                 lossy: self.lossy,
+                stats: self.stats.then_some(RuntimeStatsConfig {
+                    interval: self.stats_interval,
+                }),
                 max_log_requests: resolved_max,
             },
             root_token,

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Parser;
 use clap::ValueEnum;
@@ -239,8 +240,30 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub lossy: bool,
 
+    /// Emit periodic runtime stats to stderr (rustern-plus)
+    #[arg(long, default_value_t = false)]
+    pub stats: bool,
+
+    /// Stats report interval (`30s`, `5m`, etc.; rustern-plus)
+    #[arg(
+        long = "stats-interval",
+        default_value = "30s",
+        value_name = "DURATION",
+        value_parser = parse_stats_interval
+    )]
+    pub stats_interval: Duration,
+
     #[arg(long, value_name = "N")]
     pub max_log_requests: Option<usize>,
+}
+
+fn parse_stats_interval(s: &str) -> Result<Duration, String> {
+    let interval = humantime::parse_duration(s)
+        .map_err(|e| format!("invalid --stats-interval duration: {e}"))?;
+    if interval.is_zero() {
+        return Err("--stats-interval must be > 0".into());
+    }
+    Ok(interval)
 }
 
 /// Mirrors stern's `--container-state` choices.

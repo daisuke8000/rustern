@@ -86,3 +86,14 @@ fn validate_rejects_invalid_since() {
         .code(1)
         .stderr(predicate::str::contains("invalid --since"));
 }
+
+#[test]
+fn validate_rejects_zero_stats_interval() {
+    Command::cargo_bin("rstn")
+        .unwrap()
+        .args(["--stats", "--stats-interval", "0s", "x"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("--stats-interval must be > 0"));
+}
