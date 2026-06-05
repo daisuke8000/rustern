@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::Client;
@@ -30,6 +31,8 @@ pub(crate) struct PodWatchCtx {
     pub(crate) client: Client,
     pub(crate) root_child: CancellationToken,
     pub(crate) pod_log: PodLogRequest,
+    pub(crate) cursor_reconnect: bool,
+    pub(crate) reconnect_cursor: Arc<std::sync::Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
     pub(crate) sem: Arc<Semaphore>,
     pub(crate) follow_limit_notifier: Option<mpsc::Sender<()>>,
 }
@@ -73,6 +76,9 @@ async fn drop_pod_streams(
     for k in keys {
         if let Some(t) = tokens.remove(&k) {
             t.cancel();
+        }
+        if let Ok(mut cursor) = ctx.reconnect_cursor.lock() {
+            cursor.remove(&k);
         }
         active.remove(&k);
         let _ = mux_tx.send(MuxCmd::Remove(k)).await;
@@ -157,6 +163,9 @@ async fn handle_init_done(
     for k in diff.to_drop {
         if let Some(t) = tokens.remove(&k) {
             t.cancel();
+        }
+        if let Ok(mut cursor) = ctx.reconnect_cursor.lock() {
+            cursor.remove(&k);
         }
         active.remove(&k);
         let _ = ctx.mux_tx.send(MuxCmd::Remove(k)).await;

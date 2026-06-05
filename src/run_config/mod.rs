@@ -171,6 +171,7 @@ impl Cli {
                 since_time,
                 previous: self.previous,
             },
+            cursor_reconnect: self.cursor_reconnect && self.follow(),
             include: self.include.clone(),
             exclude: self.exclude.clone(),
             highlight: self.highlight.clone(),

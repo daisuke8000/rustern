@@ -1,11 +1,28 @@
+use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use jiff::Timestamp;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::mux::MuxCmd;
 use super::watch::PodWatchCtx;
-use crate::source::pod_log::PodLogSource;
-use crate::source::{ContextName, Labels, LogSource, SourceKey, SourceKind, SourceMeta};
+use crate::source::pod_log::{PodLogRequest, PodLogSource};
+use crate::source::{
+    BoxedLogStream, ContextName, Labels, LogEvent, LogSource, LogSourceError, SourceKey,
+    SourceKind, SourceMeta,
+};
+
+const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum StreamEnd {
+    Eof,
+    Cancelled,
+}
 
 struct AttachPodLogParams {
     ctx: Arc<PodWatchCtx>,
@@ -27,34 +44,176 @@ fn source_meta_for_key(context_name: &ContextName, key: &SourceKey) -> SourceMet
     }
 }
 
-async fn attach_pod_log_stream(p: AttachPodLogParams) {
-    let permit = if p.ctx.pod_log.follow {
-        match Arc::clone(&p.ctx.sem).try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => {
-                if let Some(tx) = &p.ctx.follow_limit_notifier {
-                    let _ = tx.try_send(());
+fn overlap_since_time(last_timestamp: DateTime<Utc>) -> Option<Timestamp> {
+    last_timestamp
+        .checked_sub_signed(CURSOR_RECONNECT_OVERLAP)
+        .unwrap_or(last_timestamp)
+        .to_rfc3339_opts(SecondsFormat::Nanos, true)
+        .parse()
+        .ok()
+}
+
+fn pod_log_request_for_open(
+    base: &PodLogRequest,
+    last_timestamp: Option<DateTime<Utc>>,
+    reopen: bool,
+) -> PodLogRequest {
+    if !reopen {
+        return base.clone();
+    }
+
+    let mut request = base.clone();
+    request.tail = None;
+    request.since_seconds = None;
+    request.since_time = last_timestamp
+        .and_then(overlap_since_time)
+        .or(base.since_time);
+    request
+}
+
+struct CursorTrackingStream {
+    inner: BoxedLogStream,
+    key: SourceKey,
+    pod_token: CancellationToken,
+    reconnect_cursor: Arc<std::sync::Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
+    done_tx: Option<oneshot::Sender<StreamEnd>>,
+}
+
+impl CursorTrackingStream {
+    fn new(
+        inner: BoxedLogStream,
+        key: SourceKey,
+        pod_token: CancellationToken,
+        reconnect_cursor: Arc<std::sync::Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
+        done_tx: oneshot::Sender<StreamEnd>,
+    ) -> Self {
+        Self {
+            inner,
+            key,
+            pod_token,
+            reconnect_cursor,
+            done_tx: Some(done_tx),
+        }
+    }
+
+    fn finish(&mut self, reason: StreamEnd) {
+        if let Some(done_tx) = self.done_tx.take() {
+            let _ = done_tx.send(reason);
+        }
+    }
+}
+
+impl futures::Stream for CursorTrackingStream {
+    type Item = Result<LogEvent, LogSourceError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                if let Ok(mut cursor) = self.reconnect_cursor.lock() {
+                    cursor.insert(self.key.clone(), event.timestamp);
                 }
-                p.ctx.root_child.cancel();
+                Poll::Ready(Some(Ok(event)))
+            }
+            Poll::Ready(Some(item)) => Poll::Ready(Some(item)),
+            Poll::Ready(None) => {
+                let reason = if self.pod_token.is_cancelled() {
+                    StreamEnd::Cancelled
+                } else {
+                    StreamEnd::Eof
+                };
+                self.finish(reason);
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for CursorTrackingStream {
+    fn drop(&mut self) {
+        let reason = if self.pod_token.is_cancelled() {
+            StreamEnd::Cancelled
+        } else {
+            StreamEnd::Eof
+        };
+        self.finish(reason);
+    }
+}
+
+async fn attach_pod_log_stream(p: AttachPodLogParams) {
+    let mut reopen = false;
+
+    loop {
+        if p.pod_token.is_cancelled() || p.ctx.root_child.is_cancelled() {
+            return;
+        }
+
+        let request = {
+            let last_timestamp = p
+                .ctx
+                .reconnect_cursor
+                .lock()
+                .ok()
+                .and_then(|cursor| cursor.get(&p.key).copied());
+            pod_log_request_for_open(&p.ctx.pod_log, last_timestamp, reopen)
+        };
+
+        let permit = if p.ctx.pod_log.follow {
+            match Arc::clone(&p.ctx.sem).try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    if let Some(tx) = &p.ctx.follow_limit_notifier {
+                        let _ = tx.try_send(());
+                    }
+                    p.ctx.root_child.cancel();
+                    return;
+                }
+            }
+        } else {
+            match Arc::clone(&p.ctx.sem).acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            }
+        };
+
+        let client = p.ctx.client.clone();
+        match PodLogSource::start(client, p.meta.clone(), p.pod_token.clone(), request).await {
+            Ok(src) => {
+                let (done_tx, done_rx) = oneshot::channel();
+                let stream = Box::new(CursorTrackingStream::new(
+                    Box::new(src).into_stream(),
+                    p.key.clone(),
+                    p.pod_token.clone(),
+                    Arc::clone(&p.ctx.reconnect_cursor),
+                    done_tx,
+                ));
+                if p.ctx
+                    .mux_tx
+                    .send(MuxCmd::Add(p.key.clone(), Box::pin(stream)))
+                    .await
+                    .is_err()
+                {
+                    drop(permit);
+                    return;
+                }
+                drop(permit);
+
+                let should_reconnect = p.ctx.cursor_reconnect && p.ctx.pod_log.follow;
+                match done_rx.await {
+                    Ok(StreamEnd::Eof) if should_reconnect => {
+                        reopen = true;
+                        continue;
+                    }
+                    _ => return,
+                }
+            }
+            Err(e) => {
+                tracing::warn!(?e, "pod log start");
+                drop(permit);
                 return;
             }
         }
-    } else {
-        match Arc::clone(&p.ctx.sem).acquire_owned().await {
-            Ok(p) => p,
-            Err(_) => return,
-        }
-    };
-
-    let client = p.ctx.client.clone();
-    match PodLogSource::start(client, p.meta, p.pod_token, p.ctx.pod_log.clone()).await {
-        Ok(src) => {
-            let stream = Box::new(src).into_stream();
-            let _ = p.ctx.mux_tx.send(MuxCmd::Add(p.key, stream)).await;
-        }
-        Err(e) => tracing::warn!(?e, "pod log start"),
     }
-    drop(permit);
 }
 
 pub(crate) fn spawn_attach_pod_log(
@@ -69,4 +228,149 @@ pub(crate) fn spawn_attach_pod_log(
         pod_token,
         key,
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use chrono::{TimeZone, Utc};
+    use futures::StreamExt;
+    use http::{Request, Response, StatusCode};
+    use kube::Client;
+    use tokio::sync::{Semaphore, mpsc};
+
+    use crate::discovery::pod_watcher::{
+        ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
+    };
+
+    fn sample_key() -> SourceKey {
+        SourceKey {
+            context: ContextName("ctx".into()),
+            namespace: "ns".into(),
+            pod: "pod-a".into(),
+            container: "app".into(),
+            uid: "uid-1".into(),
+        }
+    }
+
+    #[test]
+    fn reconnect_request_uses_overlap_and_drops_tail_and_since() {
+        let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
+        let req = pod_log_request_for_open(
+            &PodLogRequest {
+                follow: true,
+                tail: Some(25),
+                since_seconds: Some(300),
+                ..Default::default()
+            },
+            Some(ts),
+            true,
+        );
+
+        assert!(req.follow);
+        assert!(req.tail.is_none());
+        assert!(req.since_seconds.is_none());
+        let overlap_ts = req.since_time.unwrap().to_string();
+        assert!(overlap_ts.contains("2026-04-28T08:00:04"));
+    }
+
+    #[tokio::test]
+    async fn reconnects_follow_stream_with_cursor_since_time() {
+        let (mock, mut handle) =
+            tower_test::mock::pair::<Request<kube::client::Body>, Response<kube::client::Body>>();
+        let client = Client::new(mock, "default");
+        let (mux_tx, mut mux_rx) = mpsc::channel(8);
+        let pod_token = CancellationToken::new();
+
+        let ctx = Arc::new(PodWatchCtx {
+            context_name: ContextName("ctx".into()),
+            pod_regex: None,
+            pod_condition: None,
+            container_discovery: ContainerDiscoverOpts {
+                include_init_containers: true,
+                include_ephemeral_containers: true,
+                state_policy: ContainerStatePolicy::Subset(
+                    [ContainerLifecycleBucket::Running].into_iter().collect(),
+                ),
+            },
+            container_incl: regex::Regex::new(".*").unwrap(),
+            container_excl: Vec::new(),
+            allowed_ns: None,
+            exclude_pod: Vec::new(),
+            mux_tx,
+            client,
+            root_child: CancellationToken::new(),
+            pod_log: PodLogRequest {
+                follow: true,
+                tail: Some(25),
+                since_seconds: Some(300),
+                ..Default::default()
+            },
+            sem: Arc::new(Semaphore::new(8)),
+            follow_limit_notifier: None,
+            cursor_reconnect: true,
+            reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
+        });
+
+        let cancel_after_second = pod_token.clone();
+        let server = tokio::spawn(async move {
+            let (req1, send1) = handle.next_request().await.expect("first request");
+            let q1 = req1.uri().query().unwrap_or("");
+            assert!(q1.contains("tailLines=25"));
+            assert!(q1.contains("sinceSeconds=300"));
+            assert!(!q1.contains("sinceTime="));
+            let resp1 = Response::builder()
+                .status(StatusCode::OK)
+                .body(kube::client::Body::from(
+                    b"2026-04-28T08:00:05Z first\n".to_vec(),
+                ))
+                .unwrap();
+            send1.send_response(resp1);
+
+            let (req2, send2) = handle.next_request().await.expect("second request");
+            let q2 = req2.uri().query().unwrap_or("");
+            assert!(q2.contains("sinceTime="));
+            assert!(
+                q2.contains("08%3A00%3A04") || q2.contains("08:00:04"),
+                "unexpected reconnect query: {q2}"
+            );
+            assert!(!q2.contains("tailLines="));
+            assert!(!q2.contains("sinceSeconds="));
+            let resp2 = Response::builder()
+                .status(StatusCode::OK)
+                .body(kube::client::Body::from(
+                    b"2026-04-28T08:00:06Z second\n".to_vec(),
+                ))
+                .unwrap();
+            send2.send_response(resp2);
+            cancel_after_second.cancel();
+        });
+
+        spawn_attach_pod_log(&ctx, sample_key(), pod_token.clone());
+
+        let Some(MuxCmd::Add(_, first_stream)) = mux_rx.recv().await else {
+            panic!("missing first attach");
+        };
+        let first_events: Vec<_> = first_stream.collect().await;
+        assert_eq!(first_events.len(), 1);
+        assert_eq!(&*first_events[0].as_ref().unwrap().message, "first");
+
+        let Some(MuxCmd::Add(_, second_stream)) = mux_rx.recv().await else {
+            panic!("missing reconnect attach");
+        };
+        let second_events: Vec<_> = second_stream.collect().await;
+        assert_eq!(second_events.len(), 1);
+        assert_eq!(&*second_events[0].as_ref().unwrap().message, "second");
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), mux_rx.recv())
+                .await
+                .is_err()
+        );
+
+        server.await.unwrap();
+    }
 }

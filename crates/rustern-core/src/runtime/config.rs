@@ -102,6 +102,8 @@ pub struct CoreRunConfig {
     pub pod_condition: Option<PodConditionFilter>,
     /// Kubernetes log subresource knobs (`kubectl logs` flags).
     pub pod_log: PodLogRequest,
+    /// Re-open follow streams from the last seen event timestamp after disconnect.
+    pub cursor_reconnect: bool,
     /// Line-level include regex filters.
     pub include: Vec<String>,
     /// Line-level exclude regex filters.

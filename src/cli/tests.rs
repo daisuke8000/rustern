@@ -242,3 +242,10 @@ fn previous_flag_parses() {
     cli.validate().unwrap();
     assert!(cli.previous);
 }
+
+#[test]
+fn cursor_reconnect_flag_parses() {
+    let cli = cli_with_default_ns(&["--cursor-reconnect", "q"]);
+    cli.validate().unwrap();
+    assert!(cli.cursor_reconnect);
+}
