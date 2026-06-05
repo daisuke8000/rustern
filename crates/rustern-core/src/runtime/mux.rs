@@ -5,7 +5,8 @@ use tokio_stream::StreamMap;
 
 use crate::source::{BoxedLogStream, LogEvent, LogSourceError, SourceKey};
 
-pub(crate) enum MuxCmd {
+#[doc(hidden)]
+pub enum MuxCmd {
     Add(SourceKey, BoxedLogStream),
     Remove(SourceKey),
 }
@@ -35,7 +36,8 @@ async fn mux_multiplex_loop(
     }
 }
 
-pub(crate) fn spawn_mux_task(
+#[doc(hidden)]
+pub fn spawn_mux_task(
     mux_rx: mpsc::Receiver<MuxCmd>,
     raw_event_tx: mpsc::Sender<Result<LogEvent, LogSourceError>>,
 ) -> JoinHandle<()> {

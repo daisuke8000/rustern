@@ -14,7 +14,8 @@ pub(super) fn compile_list(p: &[String]) -> Result<Vec<Regex>, regex::Error> {
     p.iter().map(|s| Regex::new(s)).collect()
 }
 
-pub(super) struct PipelineStages {
+#[doc(hidden)]
+pub struct PipelineStages {
     pub container_incl: Regex,
     pub container_excl: Vec<Regex>,
     pub includes: Vec<Regex>,
@@ -28,7 +29,8 @@ pub(super) struct PipelineStages {
     pub exit_watch: ExitWatchState,
 }
 
-pub(super) fn apply_pipeline<S>(
+#[doc(hidden)]
+pub fn apply_pipeline<S>(
     stream: S,
     stages: PipelineStages,
 ) -> BoxStream<'static, Result<LogEvent, LogSourceError>>

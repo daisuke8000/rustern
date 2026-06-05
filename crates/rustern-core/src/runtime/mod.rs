@@ -22,4 +22,6 @@ pub use config::{
     CoreRunConfig, FormatterChoice, OutputMode, RunError, RunOutcome, RuntimeFwdConfig,
 };
 pub use forward::{LossyMetrics, build_log_request_semaphore, forward_to_render};
+pub use mux::{MuxCmd, spawn_mux_task};
+pub use pipeline::{PipelineStages, apply_pipeline};
 pub use run::run;
