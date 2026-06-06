@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 pub mod pod_log;
+pub mod pod_meta;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ContextName(pub String);

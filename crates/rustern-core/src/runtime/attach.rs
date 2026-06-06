@@ -9,11 +9,11 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::mux::MuxCmd;
+use super::pod_meta_cache::lookup_pod_meta;
 use super::watch_ctx::PodWatchCtx;
 use crate::source::pod_log::{PodLogRequest, PodLogSource};
 use crate::source::{
-    BoxedLogStream, ContextName, Labels, LogEvent, LogSource, LogSourceError, SourceKey,
-    SourceKind, SourceMeta,
+    BoxedLogStream, LogEvent, LogSource, LogSourceError, SourceKey, SourceKind, SourceMeta,
 };
 
 const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
@@ -32,15 +32,16 @@ struct AttachPodLogParams {
     key: SourceKey,
 }
 
-fn source_meta_for_key(context_name: &ContextName, key: &SourceKey) -> SourceMeta {
+async fn source_meta_for_key(ctx: &PodWatchCtx, key: &SourceKey) -> SourceMeta {
+    let snap = lookup_pod_meta(ctx, key).await;
     SourceMeta {
-        context: context_name.clone(),
+        context: ctx.context_name.clone(),
         namespace: key.namespace.clone(),
         pod: key.pod.clone(),
         container: key.container.clone(),
         kind: SourceKind::PodLog,
-        node: None,
-        labels: Arc::new(Labels::default()),
+        node: snap.node,
+        labels: Arc::new(snap.labels),
         uid: key.uid.clone(),
     }
 }
@@ -241,20 +242,29 @@ pub(crate) fn spawn_attach_pod_log(
     key: SourceKey,
     pod_token: CancellationToken,
 ) {
-    let meta = source_meta_for_key(&ctx.context_name, &key);
-    tokio::spawn(attach_pod_log_stream(AttachPodLogParams {
-        ctx: Arc::clone(ctx),
-        meta,
-        pod_token,
-        key,
-    }));
+    let ctx = Arc::clone(ctx);
+    tokio::spawn(async move {
+        let meta = source_meta_for_key(ctx.as_ref(), &key).await;
+        attach_pod_log_stream(AttachPodLogParams {
+            ctx,
+            meta,
+            pod_token,
+            key,
+        })
+        .await;
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::sync::Mutex;
+
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    use crate::runtime::pod_meta_cache::{new_pod_meta_cache, update_pod_meta_cache};
+    use crate::source::ContextName;
 
     use chrono::{TimeZone, Utc};
     use futures::StreamExt;
@@ -274,6 +284,54 @@ mod tests {
             container: "app".into(),
             uid: "uid-1".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn source_meta_for_key_uses_cached_pod_labels_and_node() {
+        let cache = new_pod_meta_cache();
+        let (mux_tx, _) = mpsc::channel(1);
+        let (mock, _handle) =
+            tower_test::mock::pair::<Request<kube::client::Body>, Response<kube::client::Body>>();
+        let mut labels = BTreeMap::new();
+        labels.insert("app".into(), "api".into());
+        let pod = k8s_openapi::api::core::v1::Pod {
+            metadata: ObjectMeta {
+                name: Some("pod-a".into()),
+                namespace: Some("ns".into()),
+                uid: Some("uid-1".into()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                node_name: Some("worker-1".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ctx = PodWatchCtx {
+            context_name: ContextName("ctx".into()),
+            pod_regex: None,
+            pod_condition: None,
+            container_discovery: ContainerDiscoverOpts::default(),
+            container_incl: regex::Regex::new(".*").unwrap(),
+            container_excl: vec![],
+            allowed_ns: None,
+            exclude_pod: vec![],
+            mux_tx,
+            client: Client::new(mock, "default"),
+            root_child: CancellationToken::new(),
+            pod_log: PodLogRequest::default(),
+            cursor_reconnect: false,
+            reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
+            sem: Arc::new(Semaphore::new(1)),
+            follow_limit_notifier: None,
+            pod_meta: cache,
+        };
+        update_pod_meta_cache(&ctx, &pod).await;
+
+        let meta = source_meta_for_key(&ctx, &sample_key()).await;
+        assert_eq!(meta.node.as_deref(), Some("worker-1"));
+        assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
     }
 
     #[test]
@@ -348,6 +406,7 @@ mod tests {
             follow_limit_notifier: None,
             cursor_reconnect: true,
             reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
+            pod_meta: new_pod_meta_cache(),
         });
 
         let (second_req_tx, second_req_rx) = oneshot::channel();

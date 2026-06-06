@@ -17,6 +17,7 @@ use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
 use super::forward::{LossyMetrics, RunStats, build_log_request_semaphore, forward_to_render};
 use super::mux::{MuxCmd, spawn_mux_task};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
+use super::pod_meta_cache::new_pod_meta_cache;
 use super::watch::spawn_watch_task;
 use super::watch_ctx::PodWatchCtx;
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
@@ -213,6 +214,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         sem,
         mux_tx: mux_tx.clone(),
         follow_limit_notifier,
+        pod_meta: new_pod_meta_cache(),
     });
 
     let root_w = cfg.root_token.clone();

@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use tokio::sync::RwLock;
+
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use tokio::sync::{Semaphore, mpsc};
@@ -10,6 +12,7 @@ use super::mux::MuxCmd;
 use crate::discovery::pod_condition::PodConditionFilter;
 use crate::discovery::pod_watcher::ContainerDiscoverOpts;
 use crate::source::pod_log::PodLogRequest;
+use crate::source::pod_meta::{PodLocator, PodMetaSnapshot};
 use crate::source::{ContextName, SourceKey};
 
 pub(crate) struct PodWatchCtx {
@@ -29,4 +32,5 @@ pub(crate) struct PodWatchCtx {
     pub(crate) reconnect_cursor: Arc<std::sync::Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
     pub(crate) sem: Arc<Semaphore>,
     pub(crate) follow_limit_notifier: Option<mpsc::Sender<()>>,
+    pub(crate) pod_meta: Arc<RwLock<HashMap<PodLocator, PodMetaSnapshot>>>,
 }
