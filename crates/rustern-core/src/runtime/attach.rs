@@ -277,7 +277,7 @@ mod tests {
         assert!(overlap_ts.contains("2026-04-28T08:00:04"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reconnects_follow_stream_with_cursor_since_time() {
         let (mock, mut handle) =
             tower_test::mock::pair::<Request<kube::client::Body>, Response<kube::client::Body>>();
@@ -315,7 +315,8 @@ mod tests {
             reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
         });
 
-        let cancel_after_second = pod_token.clone();
+        let (second_req_tx, second_req_rx) = oneshot::channel();
+        let (second_resp_tx, second_resp_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (req1, send1) = handle.next_request().await.expect("first request");
             let q1 = req1.uri().query().unwrap_or("");
@@ -331,6 +332,7 @@ mod tests {
             send1.send_response(resp1);
 
             let (req2, send2) = handle.next_request().await.expect("second request");
+            let _ = second_req_tx.send(());
             let q2 = req2.uri().query().unwrap_or("");
             assert!(q2.contains("sinceTime="));
             assert!(
@@ -346,7 +348,7 @@ mod tests {
                 ))
                 .unwrap();
             send2.send_response(resp2);
-            cancel_after_second.cancel();
+            let _ = second_resp_tx.send(());
         });
 
         spawn_attach_pod_log(&ctx, sample_key(), pod_token.clone());
@@ -358,13 +360,19 @@ mod tests {
         assert_eq!(first_events.len(), 1);
         assert_eq!(&*first_events[0].as_ref().unwrap().message, "first");
 
-        let Some(MuxCmd::Add(_, second_stream)) = mux_rx.recv().await else {
+        let Some(MuxCmd::Add(_, mut second_stream)) = mux_rx.recv().await else {
             panic!("missing reconnect attach");
         };
-        let second_events: Vec<_> = second_stream.collect().await;
-        assert_eq!(second_events.len(), 1);
-        assert_eq!(&*second_events[0].as_ref().unwrap().message, "second");
+        second_req_rx.await.expect("second mock request");
+        second_resp_rx.await.expect("second mock response");
+        let second_ev = second_stream
+            .next()
+            .await
+            .expect("second stream ended without events")
+            .expect("second stream error");
+        assert_eq!(&*second_ev.message, "second");
 
+        pod_token.cancel();
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(100), mux_rx.recv())
                 .await
