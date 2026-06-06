@@ -144,6 +144,7 @@ mod tests {
     use crate::discovery::pod_watcher::{
         ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
     };
+    use crate::runtime::cursor_store::ReconnectCursorStore;
     use crate::runtime::pod_meta_cache;
     use crate::source::ContextName;
     use k8s_openapi::api::core::v1::{
@@ -222,7 +223,7 @@ mod tests {
             root_child: CancellationToken::new(),
             pod_log: crate::source::pod_log::PodLogRequest::default(),
             cursor_reconnect: false,
-            reconnect_cursor: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            reconnect_cursor: ReconnectCursorStore::new(),
             sem: Arc::new(tokio::sync::Semaphore::new(1)),
             follow_limit_notifier: None,
             pod_meta: pod_meta_cache::new_pod_meta_cache(),

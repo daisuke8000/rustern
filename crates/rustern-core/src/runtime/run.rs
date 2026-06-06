@@ -1,6 +1,6 @@
 //! Orchestrator: watch → mux → pipeline → stdout.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +14,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
+use super::cursor_store::ReconnectCursorStore;
 use super::forward::{LossyMetrics, RunStats, build_log_request_semaphore, forward_to_render};
 use super::mux::{MuxCmd, spawn_mux_task};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
@@ -208,7 +209,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         root_child: cfg.root_token.clone(),
         pod_log: cfg.pod_log.clone(),
         cursor_reconnect: cfg.cursor_reconnect,
-        reconnect_cursor: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        reconnect_cursor: ReconnectCursorStore::new(),
         sem,
         mux_tx: mux_tx.clone(),
         follow_limit_notifier,

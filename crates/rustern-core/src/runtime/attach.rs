@@ -1,22 +1,19 @@
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
-use jiff::Timestamp;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use super::cursor_store::{ReconnectCursorStore, pod_log_request_for_reopen};
 use super::mux::MuxCmd;
 use super::pod_meta_cache::lookup_pod_meta;
 use super::watch_ctx::PodWatchCtx;
-use crate::source::pod_log::{PodLogRequest, PodLogSource};
+use crate::source::pod_log::PodLogSource;
 use crate::source::{
     BoxedLogStream, LogEvent, LogSource, LogSourceError, SourceKey, SourceKind, SourceMeta,
 };
 
-const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
 const MAX_REOPEN_START_RETRIES: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -46,38 +43,11 @@ async fn source_meta_for_key(ctx: &PodWatchCtx, key: &SourceKey) -> SourceMeta {
     }
 }
 
-fn overlap_since_time(last_timestamp: DateTime<Utc>) -> Option<Timestamp> {
-    last_timestamp
-        .checked_sub_signed(CURSOR_RECONNECT_OVERLAP)
-        .unwrap_or(last_timestamp)
-        .to_rfc3339_opts(SecondsFormat::Nanos, true)
-        .parse()
-        .ok()
-}
-
-fn pod_log_request_for_open(
-    base: &PodLogRequest,
-    last_timestamp: Option<DateTime<Utc>>,
-    reopen: bool,
-) -> PodLogRequest {
-    if !reopen {
-        return base.clone();
-    }
-
-    let mut request = base.clone();
-    if let Some(since_time) = last_timestamp.and_then(overlap_since_time) {
-        request.tail = None;
-        request.since_seconds = None;
-        request.since_time = Some(since_time);
-    }
-    request
-}
-
 struct CursorTrackingStream {
     inner: BoxedLogStream,
     key: SourceKey,
     pod_token: CancellationToken,
-    reconnect_cursor: Arc<std::sync::Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
+    reconnect_cursor: ReconnectCursorStore,
     done_tx: Option<oneshot::Sender<StreamEnd>>,
 }
 
@@ -86,7 +56,7 @@ impl CursorTrackingStream {
         inner: BoxedLogStream,
         key: SourceKey,
         pod_token: CancellationToken,
-        reconnect_cursor: Arc<std::sync::Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
+        reconnect_cursor: ReconnectCursorStore,
         done_tx: oneshot::Sender<StreamEnd>,
     ) -> Self {
         Self {
@@ -111,9 +81,7 @@ impl futures::Stream for CursorTrackingStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
-                if let Ok(mut cursor) = self.reconnect_cursor.lock() {
-                    cursor.insert(self.key.clone(), event.timestamp);
-                }
+                self.reconnect_cursor.record(&self.key, event.timestamp);
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(Some(item)) => Poll::Ready(Some(item)),
@@ -152,13 +120,8 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
         }
 
         let request = {
-            let last_timestamp = p
-                .ctx
-                .reconnect_cursor
-                .lock()
-                .ok()
-                .and_then(|cursor| cursor.get(&p.key).copied());
-            pod_log_request_for_open(&p.ctx.pod_log, last_timestamp, reopen)
+            let last_timestamp = p.ctx.reconnect_cursor.get(&p.key).await;
+            pod_log_request_for_reopen(&p.ctx.pod_log, last_timestamp, reopen)
         };
 
         let permit = if p.ctx.pod_log.follow {
@@ -188,7 +151,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
                     Box::new(src).into_stream(),
                     p.key.clone(),
                     p.pod_token.clone(),
-                    Arc::clone(&p.ctx.reconnect_cursor),
+                    p.ctx.reconnect_cursor.clone(),
                     done_tx,
                 ));
                 if p.ctx
@@ -258,15 +221,15 @@ pub(crate) fn spawn_attach_pod_log(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, HashMap};
-    use std::sync::Mutex;
+    use std::collections::BTreeMap;
 
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+    use crate::runtime::cursor_store::ReconnectCursorStore;
     use crate::runtime::pod_meta_cache::{new_pod_meta_cache, update_pod_meta_cache};
     use crate::source::ContextName;
+    use crate::source::pod_log::PodLogRequest;
 
-    use chrono::{TimeZone, Utc};
     use futures::StreamExt;
     use http::{Request, Response, StatusCode};
     use kube::Client;
@@ -322,7 +285,7 @@ mod tests {
             root_child: CancellationToken::new(),
             pod_log: PodLogRequest::default(),
             cursor_reconnect: false,
-            reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
+            reconnect_cursor: ReconnectCursorStore::new(),
             sem: Arc::new(Semaphore::new(1)),
             follow_limit_notifier: None,
             pod_meta: cache,
@@ -332,42 +295,6 @@ mod tests {
         let meta = source_meta_for_key(&ctx, &sample_key()).await;
         assert_eq!(meta.node.as_deref(), Some("worker-1"));
         assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
-    }
-
-    #[test]
-    fn reopen_without_cursor_keeps_initial_tail_and_since() {
-        let base = PodLogRequest {
-            follow: true,
-            tail: Some(25),
-            since_seconds: Some(300),
-            ..Default::default()
-        };
-        let req = pod_log_request_for_open(&base, None, true);
-
-        assert_eq!(req.tail, Some(25));
-        assert_eq!(req.since_seconds, Some(300));
-        assert!(req.since_time.is_none());
-    }
-
-    #[test]
-    fn reconnect_request_uses_overlap_and_drops_tail_and_since() {
-        let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
-        let req = pod_log_request_for_open(
-            &PodLogRequest {
-                follow: true,
-                tail: Some(25),
-                since_seconds: Some(300),
-                ..Default::default()
-            },
-            Some(ts),
-            true,
-        );
-
-        assert!(req.follow);
-        assert!(req.tail.is_none());
-        assert!(req.since_seconds.is_none());
-        let overlap_ts = req.since_time.unwrap().to_string();
-        assert!(overlap_ts.contains("2026-04-28T08:00:04"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -405,7 +332,7 @@ mod tests {
             sem: Arc::new(Semaphore::new(8)),
             follow_limit_notifier: None,
             cursor_reconnect: true,
-            reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
+            reconnect_cursor: ReconnectCursorStore::new(),
             pod_meta: new_pod_meta_cache(),
         });
 
