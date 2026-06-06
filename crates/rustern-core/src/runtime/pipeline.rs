@@ -81,6 +81,10 @@ where
         s = Box::pin(exit_watch_level(s, min_level, exit_watch));
     }
 
+    if order.include_after_classify_before_transform {
+        s = Box::pin(include_exclude(s, includes.clone(), excludes.clone()));
+    }
+
     s = if let Some((f, mode)) = jq {
         Box::pin(jq_evaluate(s, f, mode))
     } else {
@@ -223,6 +227,43 @@ mod tests {
             out[0].as_ref().unwrap().level,
             Some(LogLevel::Error)
         ));
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn original_exit_on_level_include_runs_before_jq() {
+        let token = CancellationToken::new();
+        let raw = r#"{"level":"error","msg":"visible line"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let stages = PipelineStages {
+            container_incl: Regex::new(".*").unwrap(),
+            container_excl: vec![],
+            includes: vec![Regex::new("^\\{").unwrap()],
+            excludes: vec![],
+            filter_on: FilterOn::Original,
+            jq: Some((
+                crate::pipeline::validate_filter(".msg").unwrap(),
+                QueryMode::Replace,
+            )),
+            level_key: Some("level".into()),
+            color_assign: ColorAssignOpts {
+                pod_colors: false,
+                container_colors: false,
+                diff_container: false,
+            },
+            exit_on: vec![],
+            exit_on_level: Some(ExitOnLevel::Warn),
+            exit_watch: ExitWatchState::new(token.clone()),
+        };
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        assert_eq!(
+            out.len(),
+            1,
+            "include matches original JSON before jq rewrite"
+        );
         assert!(token.is_cancelled());
     }
 
