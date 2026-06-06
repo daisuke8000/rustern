@@ -55,11 +55,7 @@ impl PodStreamRegistry {
             if let Some(t) = self.tokens.remove(&k) {
                 t.cancel();
             }
-            if let Ok(mut cursor) = ctx.reconnect_cursor.try_lock() {
-                cursor.remove(&k);
-            } else {
-                tracing::trace!(key = ?k, "reconnect_cursor lock contended, skipping cursor cleanup");
-            }
+            ctx.reconnect_cursor.remove(&k);
             self.active.remove(&k);
             if mux_tx.send(MuxCmd::Remove(k)).await.is_err() {
                 tracing::debug!("mux channel closed, skipping remove");
@@ -144,7 +140,6 @@ mod tests {
     use k8s_openapi::api::core::v1::ContainerStateRunning;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::HashSet as StdHashSet;
-    use std::sync::Mutex;
     use tokio::sync::mpsc;
 
     fn sample_key(container: &str, uid: &str) -> SourceKey {
@@ -223,7 +218,7 @@ mod tests {
             root_child: CancellationToken::new(),
             pod_log: crate::source::pod_log::PodLogRequest::default(),
             cursor_reconnect: false,
-            reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
+            reconnect_cursor: crate::runtime::cursor_store::ReconnectCursorStore::new(),
             sem: Arc::new(tokio::sync::Semaphore::new(1)),
             follow_limit_notifier: None,
             pod_meta: new_pod_meta_cache(),

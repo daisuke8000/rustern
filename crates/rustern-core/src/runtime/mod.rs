@@ -12,6 +12,7 @@
 
 mod attach;
 mod config;
+mod cursor_store;
 mod forward;
 mod mux;
 mod pipeline;

@@ -122,7 +122,7 @@ mod tests {
             root_child: CancellationToken::new(),
             pod_log: PodLogRequest::default(),
             cursor_reconnect: false,
-            reconnect_cursor: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            reconnect_cursor: crate::runtime::cursor_store::ReconnectCursorStore::new(),
             sem: Arc::new(Semaphore::new(1)),
             follow_limit_notifier: None,
             pod_meta: cache,

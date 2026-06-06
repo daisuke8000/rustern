@@ -3,17 +3,17 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use chrono::{DateTime, Utc};
 use regex::Regex;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use super::cursor_store::ReconnectCursorStore;
 use super::mux::MuxCmd;
 use crate::discovery::pod_condition::PodConditionFilter;
 use crate::discovery::pod_watcher::ContainerDiscoverOpts;
+use crate::source::ContextName;
 use crate::source::pod_log::PodLogRequest;
 use crate::source::pod_meta::{PodLocator, PodMetaSnapshot};
-use crate::source::{ContextName, SourceKey};
 
 pub(crate) struct PodWatchCtx {
     pub(crate) context_name: ContextName,
@@ -29,7 +29,7 @@ pub(crate) struct PodWatchCtx {
     pub(crate) root_child: CancellationToken,
     pub(crate) pod_log: PodLogRequest,
     pub(crate) cursor_reconnect: bool,
-    pub(crate) reconnect_cursor: Arc<std::sync::Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
+    pub(crate) reconnect_cursor: ReconnectCursorStore,
     pub(crate) sem: Arc<Semaphore>,
     pub(crate) follow_limit_notifier: Option<mpsc::Sender<()>>,
     pub(crate) pod_meta: Arc<RwLock<HashMap<PodLocator, PodMetaSnapshot>>>,
