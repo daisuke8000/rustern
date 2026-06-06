@@ -15,6 +15,7 @@ mod config;
 mod forward;
 mod mux;
 mod pipeline;
+mod pod_meta_cache;
 mod registry;
 mod run;
 mod watch;

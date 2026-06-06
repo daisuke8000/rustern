@@ -138,6 +138,7 @@ mod tests {
     use crate::discovery::pod_watcher::{
         ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
     };
+    use crate::runtime::pod_meta_cache::new_pod_meta_cache;
     use crate::source::ContextName;
     use k8s_openapi::api::core::v1::ContainerState;
     use k8s_openapi::api::core::v1::ContainerStateRunning;
@@ -225,6 +226,7 @@ mod tests {
             reconnect_cursor: Arc::new(Mutex::new(HashMap::new())),
             sem: Arc::new(tokio::sync::Semaphore::new(1)),
             follow_limit_notifier: None,
+            pod_meta: new_pod_meta_cache(),
         })
     }
 
