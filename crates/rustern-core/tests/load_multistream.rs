@@ -219,7 +219,7 @@ async fn run_mux_raw_load(pods: usize, lines_per_pod: usize) -> u64 {
 
     let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
     let (raw_tx, mut raw_rx) = mpsc::channel::<Result<LogEvent, LogSourceError>>(RAW_MUX_BUFFER);
-    let mux_h = spawn_mux_task(mux_rx, raw_tx);
+    let mux_h = spawn_mux_task(mux_rx, raw_tx, None);
 
     for (key, stream) in streams {
         mux_add(&mux_tx, key, stream).await;
@@ -269,14 +269,15 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
 
     let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
     let (raw_tx, raw_rx) = mpsc::channel::<Result<LogEvent, LogSourceError>>(RAW_MUX_BUFFER);
-    let mux_h = spawn_mux_task(mux_rx, raw_tx);
+    let mux_h = spawn_mux_task(mux_rx, raw_tx, None);
 
-    let metrics = LossyMetrics::new();
+    let metrics = LossyMetrics::new(None);
     let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(render_buffer.max(1));
     let pipe_stream = apply_pipeline(ReceiverStream::new(raw_rx), default_pipeline_stages());
     let fwd_cfg = RuntimeFwdConfig {
         buffer_size: render_buffer,
         lossy,
+        stats: None,
         max_log_requests: pods,
     };
 
@@ -295,12 +296,15 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
     ));
 
     let render_h = if lossy {
-        drop(render_rx);
-        None
+        tokio::spawn(async move {
+            let _keep_rx = render_rx;
+            tokio::time::sleep(LOSSY_OBSERVE).await;
+            0
+        })
     } else {
-        Some(tokio::spawn(async move {
+        tokio::spawn(async move {
             count_render_lines(render_rx, expected, fmt).await
-        }))
+        })
     };
 
     let forward_token = token.clone();
@@ -320,9 +324,9 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
 
     let delivered = if lossy {
         tokio::time::sleep(LOSSY_OBSERVE).await;
+        join_with_deadline("render_hold", render_h).await;
         0
     } else {
-        let render_h = render_h.expect("render task");
         timeout(recv_deadline(), render_h)
             .await
             .unwrap_or_else(|_| panic!("render count timed out after {:?}", recv_deadline()))
