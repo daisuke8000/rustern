@@ -25,12 +25,28 @@ impl ReconnectCursorStore {
     }
 
     pub(crate) fn get(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
-        self.inner.lock().ok()?.get(key).copied()
+        match self.inner.lock() {
+            Ok(cursor) => cursor.get(key).copied(),
+            Err(e) => {
+                tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping get");
+                None
+            }
+        }
     }
 
     pub(crate) fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
-        if let Ok(mut cursor) = self.inner.lock() {
-            cursor.insert(key.clone(), timestamp);
+        match self.inner.lock() {
+            Ok(mut cursor) => {
+                cursor.insert(key.clone(), timestamp);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    key = ?key,
+                    ?timestamp,
+                    error = %e,
+                    "reconnect_cursor lock poisoned, skipping record"
+                );
+            }
         }
     }
 
