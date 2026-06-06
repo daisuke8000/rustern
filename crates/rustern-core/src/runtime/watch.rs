@@ -137,3 +137,122 @@ where
         drop(mux_tx_w);
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discovery::pod_watcher::{
+        ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
+    };
+    use crate::runtime::pod_meta_cache;
+    use crate::source::ContextName;
+    use k8s_openapi::api::core::v1::{
+        Container, ContainerState, ContainerStateRunning, ContainerStatus, Pod, PodSpec, PodStatus,
+    };
+    use kube::api::ObjectMeta;
+    use regex::Regex;
+    use std::collections::HashSet as StdHashSet;
+
+    fn test_pod(containers: &[&str]) -> Pod {
+        Pod {
+            metadata: ObjectMeta {
+                name: Some("p".into()),
+                namespace: Some("ns".into()),
+                uid: Some("uid-1".into()),
+                ..Default::default()
+            },
+            spec: Some(PodSpec {
+                containers: containers
+                    .iter()
+                    .map(|name| Container {
+                        name: name.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+            status: Some(PodStatus {
+                container_statuses: Some(
+                    containers
+                        .iter()
+                        .map(|name| ContainerStatus {
+                            name: name.to_string(),
+                            ready: true,
+                            state: Some(ContainerState {
+                                running: Some(ContainerStateRunning::default()),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                phase: Some("Running".into()),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn test_ctx(container_incl: &str, container_excl: &[&str]) -> PodWatchCtx {
+        PodWatchCtx {
+            context_name: ContextName("ctx".into()),
+            pod_regex: None,
+            pod_condition: None,
+            container_discovery: ContainerDiscoverOpts {
+                include_init_containers: false,
+                include_ephemeral_containers: false,
+                state_policy: ContainerStatePolicy::Subset(StdHashSet::from([
+                    ContainerLifecycleBucket::Running,
+                ])),
+            },
+            container_incl: Regex::new(container_incl).unwrap(),
+            container_excl: container_excl
+                .iter()
+                .map(|p| Regex::new(p).unwrap())
+                .collect(),
+            allowed_ns: None,
+            exclude_pod: vec![],
+            mux_tx: mpsc::channel(1).0,
+            client: {
+                let (mock, _handle) = tower_test::mock::pair::<
+                    http::Request<kube::client::Body>,
+                    http::Response<kube::client::Body>,
+                >();
+                kube::Client::new(mock, "default")
+            },
+            root_child: CancellationToken::new(),
+            pod_log: crate::source::pod_log::PodLogRequest::default(),
+            cursor_reconnect: false,
+            reconnect_cursor: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            sem: Arc::new(tokio::sync::Semaphore::new(1)),
+            follow_limit_notifier: None,
+            pod_meta: pod_meta_cache::new_pod_meta_cache(),
+        }
+    }
+
+    #[tokio::test]
+    async fn filtered_stream_keys_includes_matching_containers() {
+        let pod = test_pod(&["app", "sidecar", "istio-proxy"]);
+        let ctx = test_ctx("app|sidecar", &[]);
+        let keys = filtered_stream_keys(&pod, &ctx);
+        let names: Vec<_> = keys.iter().map(|k| k.container.as_str()).collect();
+        assert_eq!(names, vec!["app", "sidecar"]);
+    }
+
+    #[tokio::test]
+    async fn filtered_stream_keys_excludes_matching_containers() {
+        let pod = test_pod(&["app", "sidecar", "istio-proxy"]);
+        let ctx = test_ctx(".*", &["istio-proxy"]);
+        let keys = filtered_stream_keys(&pod, &ctx);
+        let names: HashSet<_> = keys.iter().map(|k| k.container.as_str()).collect();
+        assert_eq!(names, HashSet::from(["app", "sidecar"]));
+    }
+
+    #[tokio::test]
+    async fn collect_keys_snapshot_applies_container_filters() {
+        let pod = test_pod(&["app", "istio-proxy"]);
+        let ctx = test_ctx("app", &[]);
+        let snap = collect_keys_snapshot(vec![pod], &ctx);
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap.iter().next().unwrap().container, "app");
+    }
+}
