@@ -13,6 +13,12 @@ pub(crate) const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
 
 const LOCK_RETRIES: usize = 16;
 
+enum TryCursorMutOutcome {
+    Success,
+    Poisoned,
+    Contended,
+}
+
 /// Last-seen log line timestamp per stream, used to resume follow streams after EOF.
 #[derive(Clone, Default)]
 pub(crate) struct ReconnectCursorStore {
@@ -44,10 +50,11 @@ impl ReconnectCursorStore {
 
     pub(crate) fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
         let key = key.clone();
-        if self.try_cursor_mut_sync(&key, |cursor| {
+        match self.try_cursor_mut_sync(&key, |cursor| {
             cursor.insert(key.clone(), timestamp);
         }) {
-            return;
+            TryCursorMutOutcome::Success | TryCursorMutOutcome::Poisoned => return,
+            TryCursorMutOutcome::Contended => {}
         }
         tracing::warn!(
             key = ?key,
@@ -78,21 +85,21 @@ impl ReconnectCursorStore {
         &self,
         key: &SourceKey,
         mut op: impl FnMut(&mut HashMap<SourceKey, DateTime<Utc>>),
-    ) -> bool {
+    ) -> TryCursorMutOutcome {
         for _ in 0..LOCK_RETRIES {
             match self.inner.try_lock() {
                 Ok(mut cursor) => {
                     op(&mut cursor);
-                    return true;
+                    return TryCursorMutOutcome::Success;
                 }
                 Err(TryLockError::Poisoned(e)) => {
-                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned");
-                    return false;
+                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping record");
+                    return TryCursorMutOutcome::Poisoned;
                 }
                 Err(TryLockError::WouldBlock) => std::thread::yield_now(),
             }
         }
-        false
+        TryCursorMutOutcome::Contended
     }
 }
 
