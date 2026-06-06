@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use http::{Request, Response, StatusCode};
-use regex::Regex;
 use rustern_core::pipeline::{ColorAssignOpts, ExitWatchState, FilterOn};
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{LineFormatter, RenderCommand, flush_ticker};
@@ -108,8 +107,6 @@ fn log_body(pod: &str, lines: usize) -> String {
 
 fn default_pipeline_stages() -> PipelineStages {
     PipelineStages {
-        container_incl: Regex::new(".*").unwrap(),
-        container_excl: vec![],
         includes: vec![],
         excludes: vec![],
         filter_on: FilterOn::Original,

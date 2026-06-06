@@ -131,8 +131,8 @@ Order inside `runtime::apply_pipeline`. Only include/exclude placement changes w
 
 | Mode | include / exclude | Stages (top to bottom) |
 |------|-------------------|-------------------------|
-| **`FilterOn::Original`** | Raw message | `include_exclude` → `container_filter` → `json_annotate` → `level_classify` → `jq_evaluate` (optional) → `color_assign` |
-| **`FilterOn::Transformed`** | After transforms | `container_filter` → `json_annotate` → `level_classify` → `jq_evaluate` (optional) → `include_exclude` → `color_assign` |
+| **`FilterOn::Original`** | Raw message | `include_exclude` → `json_annotate` → `level_classify` → `jq_evaluate` (optional) → `color_assign` |
+| **`FilterOn::Transformed`** | After transforms | `json_annotate` → `level_classify` → `jq_evaluate` (optional) → `include_exclude` → `color_assign` |
 
 ### Diagram: both paths
 
@@ -140,20 +140,18 @@ Order inside `runtime::apply_pipeline`. Only include/exclude placement changes w
 flowchart LR
     subgraph Branch1 [FilterOn::Original]
         direction LR
-        O1[include_exclude] --> O2[container_filter]
-        O2 --> O3[json_annotate]
-        O3 --> O4[level_classify]
-        O4 --> O5["jq_evaluate<br/>(pass-through if no query)"]
-        O5 --> O6[color_assign]
+        O1[include_exclude] --> O2[json_annotate]
+        O2 --> O3[level_classify]
+        O3 --> O4["jq_evaluate<br/>(pass-through if no query)"]
+        O4 --> O5[color_assign]
     end
 
     subgraph Branch2 [FilterOn::Transformed]
         direction LR
-        T1[container_filter] --> T2[json_annotate]
-        T2 --> T3[level_classify]
-        T3 --> T4["jq_evaluate<br/>(pass-through if no query)"]
-        T4 --> T5[include_exclude]
-        T5 --> T6[color_assign]
+        T1[json_annotate] --> T2[level_classify]
+        T2 --> T3["jq_evaluate<br/>(pass-through if no query)"]
+        T3 --> T4[include_exclude]
+        T4 --> T5[color_assign]
     end
 ```
 

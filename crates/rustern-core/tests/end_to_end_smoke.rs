@@ -2,9 +2,8 @@
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};
-use regex::Regex;
 use rustern_core::pipeline::{
-    ColorAssignOpts, color_assign, container_filter, json_annotate, level_classify,
+    ColorAssignOpts, color_assign, json_annotate, level_classify,
 };
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{RenderCommand, render_task};
@@ -59,7 +58,6 @@ async fn mock_logs_through_pipeline_and_renderer() {
     .unwrap();
 
     let stream = Box::new(source).into_stream();
-    let stream = container_filter(stream, Regex::new("app").unwrap(), Vec::new());
     let stream = json_annotate(stream);
     let stream = level_classify(stream, Some("level".into()));
     let stream = color_assign(

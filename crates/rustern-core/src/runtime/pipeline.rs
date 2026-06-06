@@ -5,8 +5,8 @@ use regex::Regex;
 
 use crate::pipeline::{
     ColorAssignOpts, CompiledFilter, ExitOnLevel, ExitWatchState, FilterOn, QueryMode,
-    color_assign, container_filter, exit_watch_level, exit_watch_message, include_exclude,
-    jq_evaluate, json_annotate, level_classify,
+    color_assign, exit_watch_level, exit_watch_message, include_exclude, jq_evaluate,
+    json_annotate, level_classify,
 };
 use crate::source::{LogEvent, LogSourceError};
 
@@ -16,8 +16,6 @@ pub(super) fn compile_list(p: &[String]) -> Result<Vec<Regex>, regex::Error> {
 
 #[doc(hidden)]
 pub struct PipelineStages {
-    pub container_incl: Regex,
-    pub container_excl: Vec<Regex>,
     pub includes: Vec<Regex>,
     pub excludes: Vec<Regex>,
     pub filter_on: FilterOn,
@@ -38,8 +36,6 @@ where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
 {
     let PipelineStages {
-        container_incl,
-        container_excl,
         includes,
         excludes,
         filter_on,
@@ -56,32 +52,19 @@ where
 
     let mut s: BoxStream<'static, Result<LogEvent, LogSourceError>> =
         if filter_on == FilterOn::Original {
-            let s: BoxStream<'static, Result<LogEvent, LogSourceError>> = if has_exit_msg {
+            let mut s: BoxStream<'static, Result<LogEvent, LogSourceError>> = if has_exit_msg {
                 Box::pin(exit_watch_message(stream, exit_on, exit_watch.clone()))
             } else {
                 Box::pin(stream)
             };
-            if defer_include {
-                Box::pin(container_filter(
-                    s,
-                    container_incl.clone(),
-                    container_excl.clone(),
-                ))
-            } else {
-                let s = include_exclude(s, includes.clone(), excludes.clone());
-                Box::pin(container_filter(
-                    s,
-                    container_incl.clone(),
-                    container_excl.clone(),
-                ))
+            if !defer_include {
+                s = Box::pin(include_exclude(s, includes.clone(), excludes.clone()));
             }
+            s
+        } else if has_exit_msg {
+            Box::pin(exit_watch_message(stream, exit_on, exit_watch.clone()))
         } else {
-            let s = container_filter(stream, container_incl, container_excl);
-            if has_exit_msg {
-                Box::pin(exit_watch_message(s, exit_on, exit_watch.clone()))
-            } else {
-                Box::pin(s)
-            }
+            Box::pin(stream)
         };
 
     s = Box::pin(json_annotate(s));
@@ -139,8 +122,6 @@ mod tests {
 
     fn base_stages(token: CancellationToken) -> PipelineStages {
         PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![Regex::new("visible").unwrap()],
             excludes: vec![],
             filter_on: FilterOn::Original,
@@ -178,8 +159,6 @@ mod tests {
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![Regex::new("visible").unwrap()],
             excludes: vec![],
             filter_on: FilterOn::Original,
@@ -212,8 +191,6 @@ mod tests {
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![],
             excludes: vec![],
             filter_on: FilterOn::Original,
