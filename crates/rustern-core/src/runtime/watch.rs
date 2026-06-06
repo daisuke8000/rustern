@@ -9,12 +9,15 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::mux::MuxCmd;
-use super::pod_meta_cache::{remove_pod_meta_cache, update_pod_meta_cache};
+use super::pod_meta_cache::{
+    clear_pod_meta_cache, prune_pod_meta_cache, remove_pod_meta_cache, update_pod_meta_cache,
+};
 use super::registry::PodStreamRegistry;
 use super::watch_ctx::PodWatchCtx;
 use crate::discovery::pod_condition::pod_matches_condition;
 use crate::discovery::pod_watcher::keys_from_pod;
 use crate::source::SourceKey;
+use crate::source::pod_meta::PodLocator;
 
 fn filtered_stream_keys(pod: &Pod, ctx: &PodWatchCtx) -> Vec<SourceKey> {
     keys_from_pod(pod, &ctx.context_name, &ctx.container_discovery)
@@ -91,12 +94,13 @@ where
                                 .await;
                         }
                         Event::Apply(pod) => {
-                            update_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
                             if !pod_passes_watch_filters(&pod, watch_ctx.as_ref()) {
+                                remove_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
                                 registry
                                     .remove_pod(&pod, watch_ctx.as_ref(), &mux_tx_w)
                                     .await;
                             } else {
+                                update_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
                                 let desired: HashSet<SourceKey> =
                                     filtered_stream_keys(&pod, watch_ctx.as_ref())
                                         .into_iter()
@@ -108,6 +112,7 @@ where
                         }
                         Event::Init => {
                             pending_pods.clear();
+                            clear_pod_meta_cache(watch_ctx.as_ref()).await;
                         }
                         Event::InitApply(pod) => {
                             update_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
@@ -118,6 +123,11 @@ where
                                 std::mem::take(&mut pending_pods),
                                 watch_ctx.as_ref(),
                             );
+                            let keep: HashSet<PodLocator> = snap
+                                .iter()
+                                .map(PodLocator::from_source_key)
+                                .collect();
+                            prune_pod_meta_cache(watch_ctx.as_ref(), &keep).await;
                             registry.reconcile_snapshot(snap, &watch_ctx).await;
                         }
                     }
