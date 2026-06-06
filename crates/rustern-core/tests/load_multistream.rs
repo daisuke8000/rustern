@@ -302,9 +302,7 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
             0
         })
     } else {
-        tokio::spawn(async move {
-            count_render_lines(render_rx, expected, fmt).await
-        })
+        tokio::spawn(async move { count_render_lines(render_rx, expected, fmt).await })
     };
 
     let forward_token = token.clone();
