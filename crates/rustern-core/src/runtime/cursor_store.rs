@@ -1,7 +1,7 @@
 //! In-memory per-stream cursor timestamps for `--cursor-reconnect`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use jiff::Timestamp;
@@ -10,6 +10,8 @@ use crate::source::SourceKey;
 use crate::source::pod_log::PodLogRequest;
 
 pub(crate) const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
+
+const GET_LOCK_RETRIES: usize = 16;
 
 /// Last-seen log line timestamp per stream, used to resume follow streams after EOF.
 #[derive(Clone, Default)]
@@ -24,22 +26,28 @@ impl ReconnectCursorStore {
         }
     }
 
-    pub(crate) fn get(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
-        match self.inner.lock() {
-            Ok(cursor) => cursor.get(key).copied(),
-            Err(e) => {
-                tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping get");
-                None
+    pub(crate) async fn get(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
+        for _ in 0..GET_LOCK_RETRIES {
+            match self.inner.try_lock() {
+                Ok(cursor) => return cursor.get(key).copied(),
+                Err(TryLockError::Poisoned(e)) => {
+                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping get");
+                    return None;
+                }
+                Err(TryLockError::WouldBlock) => {}
             }
+            tokio::task::yield_now().await;
         }
+        tracing::trace!(key = ?key, "reconnect_cursor lock contended, skipping get");
+        None
     }
 
     pub(crate) fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
-        match self.inner.lock() {
+        match self.inner.try_lock() {
             Ok(mut cursor) => {
                 cursor.insert(key.clone(), timestamp);
             }
-            Err(e) => {
+            Err(TryLockError::Poisoned(e)) => {
                 tracing::warn!(
                     key = ?key,
                     ?timestamp,
@@ -47,14 +55,26 @@ impl ReconnectCursorStore {
                     "reconnect_cursor lock poisoned, skipping record"
                 );
             }
+            Err(TryLockError::WouldBlock) => {
+                tracing::trace!(
+                    key = ?key,
+                    "reconnect_cursor lock contended, skipping record"
+                );
+            }
         }
     }
 
     pub(crate) fn remove(&self, key: &SourceKey) {
-        if let Ok(mut cursor) = self.inner.try_lock() {
-            cursor.remove(key);
-        } else {
-            tracing::trace!(key = ?key, "reconnect_cursor lock contended, skipping cursor cleanup");
+        match self.inner.try_lock() {
+            Ok(mut cursor) => {
+                cursor.remove(key);
+            }
+            Err(TryLockError::Poisoned(e)) => {
+                tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping remove");
+            }
+            Err(TryLockError::WouldBlock) => {
+                tracing::trace!(key = ?key, "reconnect_cursor lock contended, skipping cursor cleanup");
+            }
         }
     }
 }
@@ -127,8 +147,8 @@ mod tests {
         assert!(overlap_ts.contains("2026-04-28T08:00:04"));
     }
 
-    #[test]
-    fn store_records_gets_and_removes_cursor() {
+    #[tokio::test]
+    async fn store_records_gets_and_removes_cursor() {
         let store = ReconnectCursorStore::new();
         let key = SourceKey {
             context: crate::source::ContextName("ctx".into()),
@@ -139,10 +159,10 @@ mod tests {
         };
         let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
 
-        assert!(store.get(&key).is_none());
+        assert!(store.get(&key).await.is_none());
         store.record(&key, ts);
-        assert_eq!(store.get(&key), Some(ts));
+        assert_eq!(store.get(&key).await, Some(ts));
         store.remove(&key);
-        assert!(store.get(&key).is_none());
+        assert!(store.get(&key).await.is_none());
     }
 }

@@ -120,7 +120,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
         }
 
         let request = {
-            let last_timestamp = p.ctx.reconnect_cursor.get(&p.key);
+            let last_timestamp = p.ctx.reconnect_cursor.get(&p.key).await;
             pod_log_request_for_reopen(&p.ctx.pod_log, last_timestamp, reopen)
         };
 
