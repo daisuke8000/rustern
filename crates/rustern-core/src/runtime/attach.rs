@@ -63,11 +63,11 @@ fn pod_log_request_for_open(
     }
 
     let mut request = base.clone();
-    request.tail = None;
-    request.since_seconds = None;
-    request.since_time = last_timestamp
-        .and_then(overlap_since_time)
-        .or(base.since_time);
+    if let Some(since_time) = last_timestamp.and_then(overlap_since_time) {
+        request.tail = None;
+        request.since_seconds = None;
+        request.since_time = Some(since_time);
+    }
     request
 }
 
@@ -210,6 +210,15 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
             Err(e) => {
                 tracing::warn!(?e, "pod log start");
                 drop(permit);
+                if reopen
+                    && p.ctx.cursor_reconnect
+                    && p.ctx.pod_log.follow
+                    && !p.pod_token.is_cancelled()
+                    && !p.ctx.root_child.is_cancelled()
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    continue;
+                }
                 return;
             }
         }
@@ -254,6 +263,21 @@ mod tests {
             container: "app".into(),
             uid: "uid-1".into(),
         }
+    }
+
+    #[test]
+    fn reopen_without_cursor_keeps_initial_tail_and_since() {
+        let base = PodLogRequest {
+            follow: true,
+            tail: Some(25),
+            since_seconds: Some(300),
+            ..Default::default()
+        };
+        let req = pod_log_request_for_open(&base, None, true);
+
+        assert_eq!(req.tail, Some(25));
+        assert_eq!(req.since_seconds, Some(300));
+        assert!(req.since_time.is_none());
     }
 
     #[test]

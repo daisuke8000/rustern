@@ -24,7 +24,7 @@ use rustern_core::source::{
     BoxedLogStream, ContextName, Labels, LogEvent, LogSource, LogSourceError, SourceKey,
     SourceKind, SourceMeta,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
@@ -295,13 +295,15 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
         Duration::from_millis(50),
     ));
 
+    let (release_render_tx, release_render_rx) = oneshot::channel();
     let render_h = if lossy {
         tokio::spawn(async move {
             let _keep_rx = render_rx;
-            tokio::time::sleep(LOSSY_OBSERVE).await;
+            let _ = release_render_rx.await;
             0
         })
     } else {
+        drop(release_render_rx);
         tokio::spawn(async move { count_render_lines(render_rx, expected, fmt).await })
     };
 
@@ -322,6 +324,7 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
 
     let delivered = if lossy {
         tokio::time::sleep(LOSSY_OBSERVE).await;
+        let _ = release_render_tx.send(());
         join_with_deadline("render_hold", render_h).await;
         0
     } else {
