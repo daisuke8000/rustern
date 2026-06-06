@@ -159,7 +159,7 @@ pub enum RunError {
 
 /// High-level outcome after [`crate::run`] returns (streaming ended cooperatively).
 pub struct RunOutcome {
-    /// Currently always `false` (reserved for future error aggregation).
+    /// `true` when one or more multiplexed sources reported `LogSourceError::Api`.
     pub had_source_errors: bool,
 }
 

@@ -133,19 +133,22 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     };
     let follow_limit_notifier = follow_lim.as_ref().map(|(s, _)| s.clone());
 
-    let stats = cfg.fwd.stats.map(|_| RunStats::new(cfg.fwd.lossy));
-    let h_mux = spawn_mux_task(mux_rx, raw_event_tx, stats.clone());
+    let stats = RunStats::new(cfg.fwd.lossy);
+    let h_mux = spawn_mux_task(mux_rx, raw_event_tx, Some(stats.clone()));
 
-    let metrics = LossyMetrics::new(stats.clone());
+    let metrics = LossyMetrics::new(Some(stats.clone()));
     let metrics_rep = metrics.clone();
     let rep_token = cfg.root_token.clone();
     tokio::spawn(async move {
         metrics_rep.cumulative_reporter(rep_token).await;
     });
-    if let (Some(stats), Some(stats_cfg)) = (stats.clone(), cfg.fwd.stats) {
+    if let Some(stats_cfg) = cfg.fwd.stats {
+        let stats_rep = stats.clone();
         let stats_token = cfg.root_token.clone();
         tokio::spawn(async move {
-            stats.stderr_reporter(stats_cfg.interval, stats_token).await;
+            stats_rep
+                .stderr_reporter(stats_cfg.interval, stats_token)
+                .await;
         });
     }
 
@@ -253,6 +256,6 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     }
 
     Ok(RunOutcome {
-        had_source_errors: false,
+        had_source_errors: stats.had_source_errors(),
     })
 }
