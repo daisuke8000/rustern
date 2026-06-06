@@ -31,6 +31,10 @@ impl LossyMetrics {
         })
     }
 
+    pub fn drop_count(&self) -> u64 {
+        self.dropped_total.load(Ordering::Relaxed)
+    }
+
     pub async fn record_drop(self: &Arc<Self>, reason: &str) {
         self.dropped_total.fetch_add(1, Ordering::Relaxed);
         let mut last = self.last_warn_at.lock().await;

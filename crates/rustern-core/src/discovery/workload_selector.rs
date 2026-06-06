@@ -411,7 +411,6 @@ mod tests {
                 values: Some(vec!["x".into()]),
             }]),
             match_labels: Some(BTreeMap::from([("tier".into(), "web".into())])),
-            ..Default::default()
         };
         assert_eq!(
             label_selector_from_meta(&ls, None, ResourceKind::Deployment, "api"),

@@ -24,7 +24,7 @@ impl ExitOnLevel {
             "info" => Ok(Self::Info),
             "warn" | "warning" => Ok(Self::Warn),
             "error" | "err" | "fatal" => Ok(Self::Error),
-            other if other.is_empty() => Err("empty --exit-on-level".into()),
+            "" => Err("empty --exit-on-level".into()),
             other => Err(format!("invalid --exit-on-level: {other}")),
         }
     }
