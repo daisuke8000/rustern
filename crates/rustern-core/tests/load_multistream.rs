@@ -239,7 +239,7 @@ async fn run_mux_raw_load(pods: usize, lines_per_pod: usize) -> u64 {
 
     drop(mux_tx);
     token.cancel();
-    let _ = timeout(JOIN_LIMIT, mux_h).await;
+    join_with_deadline("mux", mux_h).await;
     join_with_deadline("mock_log_server", server).await;
     got
 }
@@ -329,10 +329,11 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
             .expect("render task panicked")
     };
 
+    drop(mux_tx);
     token.cancel();
     let _ = render_tx.send(RenderCommand::Shutdown).await;
-    let _ = timeout(JOIN_LIMIT, forward_h).await;
-    let _ = timeout(JOIN_LIMIT, mux_h).await;
+    join_with_deadline("forward", forward_h).await;
+    join_with_deadline("mux", mux_h).await;
     join_with_deadline("mock_log_server", server).await;
 
     (delivered, metrics.drop_count())
