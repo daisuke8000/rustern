@@ -1,6 +1,6 @@
 //! Watch-side cache of per-pod metadata for attach-time [`SourceMeta`] enrichment.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Pod;
@@ -26,6 +26,15 @@ pub(crate) async fn update_pod_meta_cache(ctx: &PodWatchCtx, pod: &Pod) {
     let snapshot = pod_meta_snapshot_from_pod(pod);
     let mut cache = ctx.pod_meta.write().await;
     cache.insert(locator, snapshot);
+}
+
+pub(crate) async fn clear_pod_meta_cache(ctx: &PodWatchCtx) {
+    ctx.pod_meta.write().await.clear();
+}
+
+pub(crate) async fn prune_pod_meta_cache(ctx: &PodWatchCtx, keep: &HashSet<PodLocator>) {
+    let mut cache = ctx.pod_meta.write().await;
+    cache.retain(|loc, _| keep.contains(loc));
 }
 
 pub(crate) async fn remove_pod_meta_cache(ctx: &PodWatchCtx, pod: &Pod) {
@@ -153,6 +162,53 @@ mod tests {
         let snap = lookup_pod_meta(&ctx, &key).await;
         assert!(snap.node.is_none());
         assert!(snap.labels.0.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prune_pod_meta_cache_drops_stale_locators() {
+        let cache = new_pod_meta_cache();
+        let ctx = test_ctx(cache);
+        update_pod_meta_cache(&ctx, &test_pod()).await;
+
+        let stale_pod = Pod {
+            metadata: ObjectMeta {
+                name: Some("gone".into()),
+                namespace: Some("ns".into()),
+                uid: Some("uid-gone".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        update_pod_meta_cache(&ctx, &stale_pod).await;
+
+        let keep: HashSet<PodLocator> =
+            HashSet::from([
+                PodLocator::try_from_pod(&ContextName("ctx".into()), &test_pod()).expect("locator"),
+            ]);
+        prune_pod_meta_cache(&ctx, &keep).await;
+
+        let active_key = SourceKey {
+            context: ContextName("ctx".into()),
+            namespace: "ns".into(),
+            pod: "pod-a".into(),
+            container: "app".into(),
+            uid: "uid-1".into(),
+        };
+        let stale_key = SourceKey {
+            context: ContextName("ctx".into()),
+            namespace: "ns".into(),
+            pod: "gone".into(),
+            container: "app".into(),
+            uid: "uid-gone".into(),
+        };
+        assert_ne!(
+            lookup_pod_meta(&ctx, &active_key).await,
+            PodMetaSnapshot::default()
+        );
+        assert_eq!(
+            lookup_pod_meta(&ctx, &stale_key).await,
+            PodMetaSnapshot::default()
+        );
     }
 
     #[tokio::test]

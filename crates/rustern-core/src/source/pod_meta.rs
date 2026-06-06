@@ -33,9 +33,10 @@ impl PodLocator {
     pub fn try_from_pod(context: &ContextName, pod: &Pod) -> Option<Self> {
         let uid = pod.metadata.uid.clone()?;
         let pod_name = pod.metadata.name.clone()?;
+        let namespace = pod.metadata.namespace.clone()?;
         Some(Self {
             context: context.clone(),
-            namespace: pod.metadata.namespace.clone().unwrap_or_default(),
+            namespace,
             pod: pod_name,
             uid,
         })
@@ -93,6 +94,19 @@ mod tests {
         let snap = pod_meta_snapshot_from_pod(&pod_with_meta(None, None));
         assert!(snap.node.is_none());
         assert!(snap.labels.0.is_empty());
+    }
+
+    #[test]
+    fn try_from_pod_requires_namespace() {
+        let pod = Pod {
+            metadata: ObjectMeta {
+                name: Some("pod-a".into()),
+                uid: Some("uid-1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(PodLocator::try_from_pod(&ContextName("ctx".into()), &pod).is_none());
     }
 
     #[test]
