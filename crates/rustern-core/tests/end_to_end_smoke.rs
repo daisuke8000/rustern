@@ -2,9 +2,7 @@
 
 use futures::StreamExt;
 use http::{Request, Response, StatusCode};
-use rustern_core::pipeline::{
-    ColorAssignOpts, color_assign, json_annotate, level_classify,
-};
+use rustern_core::pipeline::{ColorAssignOpts, color_assign, json_annotate, level_classify};
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{RenderCommand, render_task};
 use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
