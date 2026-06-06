@@ -136,6 +136,23 @@ fn maps_log_api_flags() {
 }
 
 #[test]
+fn maps_cursor_reconnect_only_when_following() {
+    let cli_follow = cli_with_default_ns(&["--cursor-reconnect", "q"]);
+    cli_follow.validate().unwrap();
+    let cfg_follow = cli_follow
+        .core_run_config(CancellationToken::new())
+        .unwrap();
+    assert!(cfg_follow.cursor_reconnect);
+
+    let cli_no_follow = cli_with_default_ns(&["--cursor-reconnect", "--no-follow", "q"]);
+    cli_no_follow.validate().unwrap();
+    let cfg_no_follow = cli_no_follow
+        .core_run_config(CancellationToken::new())
+        .unwrap();
+    assert!(!cfg_no_follow.cursor_reconnect);
+}
+
+#[test]
 fn stern_aligned_default_max_when_no_follow() {
     let cli = cli_with_default_ns(&["--no-follow", "q"]);
     cli.validate().unwrap();

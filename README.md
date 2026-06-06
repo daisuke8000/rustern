@@ -39,4 +39,5 @@ Behavior is tracked against [stern](https://github.com/stern/stern); not every f
 - **`--exit-on REGEX`** (repeatable): exit code **1** on first raw log line matching any pattern (evaluated **before** `-i`/`-e`, so hidden lines still trigger exit). Useful for CI/smoke.
 - **`--exit-on-level LEVEL`**: exit code **1** when classified log level is **at or above** `LEVEL` (`trace` < `debug` < `info` < `warn` < `error`). Uses `--level-key` when set; works with follow and one-shot.
 - **`--stats`**: emit one human-readable runtime summary line to **stderr** every `--stats-interval` (default `30s`) without polluting stdout. Reports active log streams, forwarded lines per window, and lossy dropped lines when `--lossy` is enabled.
+- **`--cursor-reconnect`**: opt-in reconnect for follow mode. rustern keeps the last seen timestamp per pod/container source in memory; if a stream disconnects, it re-opens with `sinceTime=<last_timestamp-1s overlap>` to avoid gaps at the seam. `--since` / `--since-time` / `--tail` only apply to the first open for a given pod UID, and the flag is ignored with `--no-follow`.
 

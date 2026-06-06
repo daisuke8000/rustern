@@ -1,6 +1,6 @@
 //! Orchestrator: watch → mux → pipeline → stdout.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -204,6 +204,8 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         client,
         root_child: cfg.root_token.clone(),
         pod_log: cfg.pod_log.clone(),
+        cursor_reconnect: cfg.cursor_reconnect,
+        reconnect_cursor: Arc::new(std::sync::Mutex::new(HashMap::new())),
         sem,
         mux_tx: mux_tx.clone(),
         follow_limit_notifier,

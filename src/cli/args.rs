@@ -141,6 +141,10 @@ pub struct Cli {
     #[arg(long = "previous", action = clap::ArgAction::SetTrue)]
     pub previous: bool,
 
+    /// Re-open follow streams from the last seen event timestamp after disconnect (rustern-plus; disabled with `--no-follow`)
+    #[arg(long = "cursor-reconnect", action = clap::ArgAction::SetTrue)]
+    pub cursor_reconnect: bool,
+
     /// Include lines matching regex (repeatable)
     #[arg(short = 'i', long = "include", action = clap::ArgAction::Append)]
     pub include: Vec<String>,
