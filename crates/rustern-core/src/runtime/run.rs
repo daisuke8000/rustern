@@ -14,7 +14,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
-use super::forward::{LossyMetrics, build_log_request_semaphore, forward_to_render};
+use super::forward::{LossyMetrics, RunStats, build_log_request_semaphore, forward_to_render};
 use super::mux::{MuxCmd, spawn_mux_task};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use super::watch::{PodWatchCtx, spawn_watch_task};
@@ -132,14 +132,21 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     };
     let follow_limit_notifier = follow_lim.as_ref().map(|(s, _)| s.clone());
 
-    let h_mux = spawn_mux_task(mux_rx, raw_event_tx);
+    let stats = cfg.fwd.stats.map(|_| RunStats::new(cfg.fwd.lossy));
+    let h_mux = spawn_mux_task(mux_rx, raw_event_tx, stats.clone());
 
-    let metrics = LossyMetrics::new();
+    let metrics = LossyMetrics::new(stats.clone());
     let metrics_rep = metrics.clone();
     let rep_token = cfg.root_token.clone();
     tokio::spawn(async move {
         metrics_rep.cumulative_reporter(rep_token).await;
     });
+    if let (Some(stats), Some(stats_cfg)) = (stats.clone(), cfg.fwd.stats) {
+        let stats_token = cfg.root_token.clone();
+        tokio::spawn(async move {
+            stats.stderr_reporter(stats_cfg.interval, stats_token).await;
+        });
+    }
 
     let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(cfg.fwd.render_channel_capacity());
     let flush_token = cfg.root_token.clone();

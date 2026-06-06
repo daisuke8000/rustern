@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Parser;
 
@@ -205,6 +206,22 @@ fn exit_on_flags_parse() {
     cli.validate().unwrap();
     assert_eq!(cli.exit_on, vec!["panic".to_string()]);
     assert_eq!(cli.exit_on_level.as_deref(), Some("warn"));
+}
+
+#[test]
+fn stats_flags_parse() {
+    let cli = cli_with_default_ns(&["--stats", "--stats-interval", "45s", "q"]);
+    cli.validate().unwrap();
+    assert!(cli.stats);
+    assert_eq!(cli.stats_interval, Duration::from_secs(45));
+}
+
+#[test]
+fn stats_interval_defaults_to_thirty_seconds() {
+    let cli = cli_with_default_ns(&["q"]);
+    cli.validate().unwrap();
+    assert!(!cli.stats);
+    assert_eq!(cli.stats_interval, Duration::from_secs(30));
 }
 
 #[test]

@@ -1,5 +1,7 @@
 //! `CoreRunConfig`, run outcome, and error types.
 
+use std::time::Duration;
+
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::context::ContextSelector;
@@ -10,12 +12,21 @@ use crate::pipeline::{FilterOn, QueryMode};
 use crate::source::pod_log::PodLogRequest;
 
 /// Bounded queue and parallelism hints for forwarded log events (`run` runtime).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct RuntimeStatsConfig {
+    /// Emit one stderr report per interval.
+    pub interval: Duration,
+}
+
+/// Bounded queue and parallelism hints for forwarded log events (`run` runtime).
 #[derive(Debug, Clone)]
 pub struct RuntimeFwdConfig {
     /// Render channel capacity.
     pub buffer_size: usize,
     /// Skip lines instead of blocking when the render queue is full.
     pub lossy: bool,
+    /// Optional stderr stats reporter.
+    pub stats: Option<RuntimeStatsConfig>,
     /// Upper bound on concurrent pod log streams.
     pub max_log_requests: usize,
 }
@@ -159,6 +170,7 @@ mod tests {
         let fwd = RuntimeFwdConfig {
             buffer_size: 8192,
             lossy: false,
+            stats: None,
             max_log_requests: 10,
         };
         assert_eq!(fwd.render_channel_capacity(), 8192);
@@ -169,6 +181,7 @@ mod tests {
         let fwd = RuntimeFwdConfig {
             buffer_size: 0,
             lossy: false,
+            stats: None,
             max_log_requests: 10,
         };
         assert_eq!(fwd.render_channel_capacity(), 1);

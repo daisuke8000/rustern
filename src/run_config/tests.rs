@@ -1,5 +1,6 @@
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
@@ -273,6 +274,23 @@ fn maps_exit_on_flags() {
         cfg.exit_on_level,
         Some(rustern_core::pipeline::ExitOnLevel::Error)
     );
+}
+
+#[test]
+fn maps_stats_flags() {
+    let cli = cli_with_default_ns(&["--stats", "--stats-interval", "45s", "q"]);
+    cli.validate().unwrap();
+    let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+    let stats = cfg.fwd.stats.expect("stats config");
+    assert_eq!(stats.interval, Duration::from_secs(45));
+}
+
+#[test]
+fn leaves_stats_disabled_without_flag() {
+    let cli = cli_with_default_ns(&["q"]);
+    cli.validate().unwrap();
+    let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
+    assert!(cfg.fwd.stats.is_none());
 }
 
 #[test]
