@@ -51,11 +51,8 @@ where
         exit_watch,
     } = stages;
 
-    let order = PipelineStageOrder::resolve(
-        filter_on,
-        !exit_on.is_empty(),
-        exit_on_level.is_some(),
-    );
+    let order =
+        PipelineStageOrder::resolve(filter_on, !exit_on.is_empty(), exit_on_level.is_some());
 
     let mut s: BoxStream<'static, Result<LogEvent, LogSourceError>> = Box::pin(stream);
 
