@@ -4,9 +4,9 @@ use futures::stream::{BoxStream, Stream};
 use regex::Regex;
 
 use crate::pipeline::{
-    ColorAssignOpts, CompiledFilter, ExitOnLevel, ExitWatchState, FilterOn, QueryMode,
-    color_assign, container_filter, exit_watch_level, exit_watch_message, include_exclude,
-    jq_evaluate, json_annotate, level_classify,
+    ColorAssignOpts, CompiledFilter, ExitOnLevel, ExitWatchState, FilterOn, PipelineStageOrder,
+    QueryMode, color_assign, container_filter, exit_watch_level, exit_watch_message,
+    include_exclude, jq_evaluate, json_annotate, level_classify,
 };
 use crate::source::{LogEvent, LogSourceError};
 
@@ -51,38 +51,31 @@ where
         exit_watch,
     } = stages;
 
-    let has_exit_msg = !exit_on.is_empty();
-    let defer_include = filter_on == FilterOn::Original && exit_on_level.is_some();
+    let order = PipelineStageOrder::resolve(
+        filter_on,
+        !exit_on.is_empty(),
+        exit_on_level.is_some(),
+    );
 
-    let mut s: BoxStream<'static, Result<LogEvent, LogSourceError>> =
-        if filter_on == FilterOn::Original {
-            let s: BoxStream<'static, Result<LogEvent, LogSourceError>> = if has_exit_msg {
-                Box::pin(exit_watch_message(stream, exit_on, exit_watch.clone()))
-            } else {
-                Box::pin(stream)
-            };
-            if defer_include {
-                Box::pin(container_filter(
-                    s,
-                    container_incl.clone(),
-                    container_excl.clone(),
-                ))
-            } else {
-                let s = include_exclude(s, includes.clone(), excludes.clone());
-                Box::pin(container_filter(
-                    s,
-                    container_incl.clone(),
-                    container_excl.clone(),
-                ))
-            }
-        } else {
-            let s = container_filter(stream, container_incl, container_excl);
-            if has_exit_msg {
-                Box::pin(exit_watch_message(s, exit_on, exit_watch.clone()))
-            } else {
-                Box::pin(s)
-            }
-        };
+    let mut s: BoxStream<'static, Result<LogEvent, LogSourceError>> = Box::pin(stream);
+
+    if order.exit_on_message_before_filters {
+        s = Box::pin(exit_watch_message(s, exit_on.clone(), exit_watch.clone()));
+    }
+
+    if order.include_before_container {
+        s = Box::pin(include_exclude(s, includes.clone(), excludes.clone()));
+    }
+
+    s = Box::pin(container_filter(
+        s,
+        container_incl.clone(),
+        container_excl.clone(),
+    ));
+
+    if !order.exit_on_message_before_filters && !exit_on.is_empty() {
+        s = Box::pin(exit_watch_message(s, exit_on, exit_watch.clone()));
+    }
 
     s = Box::pin(json_annotate(s));
     s = Box::pin(level_classify(s, level_key));
@@ -97,11 +90,9 @@ where
         s
     };
 
-    s = if filter_on == FilterOn::Transformed || defer_include {
-        Box::pin(include_exclude(s, includes, excludes))
-    } else {
-        s
-    };
+    if order.include_after_transform {
+        s = Box::pin(include_exclude(s, includes, excludes));
+    }
 
     Box::pin(color_assign(s, color_opts))
 }
@@ -236,5 +227,77 @@ mod tests {
             Some(LogLevel::Error)
         ));
         assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn transformed_exit_on_fires_on_raw_message_before_jq() {
+        let token = CancellationToken::new();
+        let raw = r#"{"msg":"secret payload"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let stages = PipelineStages {
+            container_incl: Regex::new(".*").unwrap(),
+            container_excl: vec![],
+            includes: vec![Regex::new("visible").unwrap()],
+            excludes: vec![],
+            filter_on: FilterOn::Transformed,
+            jq: Some((
+                crate::pipeline::validate_filter(".msg").unwrap(),
+                QueryMode::Replace,
+            )),
+            level_key: None,
+            color_assign: ColorAssignOpts {
+                pod_colors: false,
+                container_colors: false,
+                diff_container: false,
+            },
+            exit_on: vec![Regex::new("secret").unwrap()],
+            exit_on_level: None,
+            exit_watch: ExitWatchState::new(token.clone()),
+        };
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        assert!(out.is_empty(), "include filter hides transformed line");
+        assert!(
+            token.is_cancelled(),
+            "transformed path runs exit-on on raw message before jq/include"
+        );
+    }
+
+    #[tokio::test]
+    async fn transformed_include_runs_after_jq() {
+        let token = CancellationToken::new();
+        let raw = r#"{"msg":"visible line"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let stages = PipelineStages {
+            container_incl: Regex::new(".*").unwrap(),
+            container_excl: vec![],
+            includes: vec![Regex::new("\"visible").unwrap()],
+            excludes: vec![],
+            filter_on: FilterOn::Transformed,
+            jq: Some((
+                crate::pipeline::validate_filter(".msg").unwrap(),
+                QueryMode::Replace,
+            )),
+            level_key: None,
+            color_assign: ColorAssignOpts {
+                pod_colors: false,
+                container_colors: false,
+                diff_container: false,
+            },
+            exit_on: vec![],
+            exit_on_level: None,
+            exit_watch: ExitWatchState::new(token),
+        };
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].as_ref().unwrap().message.contains("visible"),
+            "include matches jq-replaced message text"
+        );
     }
 }
