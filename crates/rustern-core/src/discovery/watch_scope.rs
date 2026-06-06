@@ -34,8 +34,12 @@ pub enum WatchScopeError {
 ///
 /// When `-l` / `--selector` or `--field-selector` is set, an omitted QUERY becomes `.*`.
 /// An explicit `.` with a label selector is preserved for runner compat (see `PodWatchPlan::build`).
+/// An explicit `.` with only `--field-selector` normalizes to `.*` for stern-like wildcard scope.
 pub fn resolve_pod_query(input: &WatchScopeInput<'_>) -> Result<String, WatchScopeError> {
     if let Some(q) = input.query {
+        if q == "." && input.selector.is_none() && input.field_selector.is_some() {
+            return Ok(IMPLICIT_POD_QUERY.to_string());
+        }
         return Ok(q.to_string());
     }
     if input.selector.is_some() || input.field_selector.is_some() {
@@ -149,6 +153,13 @@ mod tests {
         let ns: [String; 0] = [];
         let i = input(Some("."), Some("app=foo"), None, false, &ns);
         assert_eq!(resolve_pod_query(&i).unwrap(), ".");
+    }
+
+    #[test]
+    fn dot_sentinel_with_field_selector_normalizes_to_wildcard() {
+        let ns: [String; 0] = [];
+        let i = input(Some("."), None, Some("metadata.name=foo"), false, &ns);
+        assert_eq!(resolve_pod_query(&i).unwrap(), ".*");
     }
 
     #[test]

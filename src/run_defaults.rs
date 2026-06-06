@@ -74,6 +74,13 @@ mod tests {
     }
 
     #[test]
+    fn dot_sentinel_with_field_selector_normalizes_to_wildcard() {
+        let cli =
+            Cli::try_parse_from(["rstn", "--field-selector", "metadata.name=foo", "."]).unwrap();
+        assert_eq!(resolved_pod_query(&cli).unwrap(), ".*");
+    }
+
+    #[test]
     fn missing_query_without_selector_fails() {
         let cli = Cli::try_parse_from(["rstn"]).unwrap();
         assert!(resolved_pod_query(&cli).is_err());
