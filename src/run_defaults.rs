@@ -1,53 +1,36 @@
 //! Shared CLI default resolution for pod query and namespace.
 
-use rustern_core::discovery::context::{default_namespace, resolve_kubeconfig};
+use rustern_core::discovery::watch_scope::{
+    WatchScopeError, WatchScopeInput, resolve_namespaces, resolve_pod_query,
+};
 
 use crate::cli::Cli;
 
-const IMPLICIT_POD_QUERY: &str = ".*";
+fn watch_scope_input(cli: &Cli) -> WatchScopeInput<'_> {
+    WatchScopeInput {
+        query: cli.query.as_deref(),
+        selector: cli.selector.as_deref(),
+        field_selector: cli.field_selector.as_deref(),
+        all_namespaces: cli.all_namespaces,
+        namespace_flags: &cli.namespaces,
+    }
+}
+
+fn map_watch_scope_error(err: WatchScopeError) -> String {
+    err.to_string()
+}
 
 /// Resolve the pod query positional, applying stern-like defaults.
 ///
 /// When `-l` / `--selector` or `--field-selector` is set, an omitted QUERY becomes `.*`.
 pub fn resolved_pod_query(cli: &Cli) -> Result<String, String> {
-    if let Some(q) = cli.query.as_deref() {
-        return Ok(q.to_string());
-    }
-    if cli.selector.is_some() || cli.field_selector.is_some() {
-        return Ok(IMPLICIT_POD_QUERY.to_string());
-    }
-    Err("pod query (QUERY) is required unless `-l` or `--field-selector` is set".into())
-}
-
-fn deduped_explicit_namespaces(cli: &Cli) -> Vec<String> {
-    let mut out = Vec::new();
-    for part in &cli.namespaces {
-        for seg in part.split(',') {
-            let t = seg.trim();
-            if t.is_empty() {
-                continue;
-            }
-            if !out.iter().any(|n| n == t) {
-                out.push(t.to_string());
-            }
-        }
-    }
-    out
+    resolve_pod_query(&watch_scope_input(cli)).map_err(map_watch_scope_error)
 }
 
 /// Resolve namespace scope: `-A` → empty; explicit `-n` → deduped list; else active context namespace.
 pub fn resolved_namespaces(cli: &Cli) -> Result<Vec<String>, String> {
-    if cli.all_namespaces {
-        return Ok(Vec::new());
-    }
-    let explicit = deduped_explicit_namespaces(cli);
-    if !explicit.is_empty() {
-        return Ok(explicit);
-    }
-    let selector = cli.context_selector();
-    let kubeconfig = resolve_kubeconfig(&selector).map_err(|e| e.to_string())?;
-    let ns = default_namespace(&kubeconfig, &selector).map_err(|e| e.to_string())?;
-    Ok(vec![ns])
+    resolve_namespaces(&watch_scope_input(cli), &cli.context_selector())
+        .map_err(map_watch_scope_error)
 }
 
 #[cfg(test)]
