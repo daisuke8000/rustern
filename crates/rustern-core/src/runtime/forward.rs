@@ -26,6 +26,7 @@ pub struct RunStats {
     active_streams: AtomicU64,
     forwarded_lines: AtomicU64,
     dropped_lines: AtomicU64,
+    source_errors: AtomicU64,
     lossy: bool,
 }
 
@@ -35,8 +36,17 @@ impl RunStats {
             active_streams: AtomicU64::new(0),
             forwarded_lines: AtomicU64::new(0),
             dropped_lines: AtomicU64::new(0),
+            source_errors: AtomicU64::new(0),
             lossy,
         })
+    }
+
+    pub fn record_source_api_error(&self) {
+        self.source_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn had_source_errors(&self) -> bool {
+        self.source_errors.load(Ordering::Relaxed) > 0
     }
 
     pub fn set_active_streams(&self, active_streams: usize) {
@@ -193,7 +203,13 @@ pub async fn forward_to_render(
                     stats.record_forwarded_line();
                 }
             }
-            Err(e) => tracing::warn!(error = ?e, "source stream error"),
+            Err(LogSourceError::Api(e)) => {
+                if let Some(stats) = &metrics.stats {
+                    stats.record_source_api_error();
+                }
+                tracing::warn!(error = %e, "source stream error");
+            }
+            Err(LogSourceError::Eof) | Err(LogSourceError::Cancelled) => {}
         }
     }
 }
@@ -364,6 +380,93 @@ mod tests {
         let snapshot = stats.snapshot_and_reset();
         assert_eq!(snapshot.forwarded_lines, 1);
         assert_eq!(snapshot.dropped_lines, 1);
+    }
+
+    #[tokio::test]
+    async fn source_api_errors_are_counted() {
+        let stats = RunStats::new(false);
+        let metrics = LossyMetrics::new(Some(stats.clone()));
+        let (tx, mut rx) = mpsc::channel::<RenderCommand>(8);
+        let token = CancellationToken::new();
+
+        fn sample_ev() -> LogEvent {
+            LogEvent {
+                source: Arc::new(SourceMeta {
+                    context: ContextName("c".into()),
+                    namespace: "n".into(),
+                    pod: "p".into(),
+                    container: "x".into(),
+                    kind: SourceKind::PodLog,
+                    node: None,
+                    labels: Arc::new(Labels::default()),
+                    uid: "u".into(),
+                }),
+                timestamp: chrono::Utc::now(),
+                message: std::sync::Arc::from("x"),
+                structured: None,
+                level: None,
+                palette_index: None,
+                container_palette_index: None,
+            }
+        }
+
+        let s = stream::iter(vec![
+            Ok(sample_ev()),
+            Err(LogSourceError::Api("conn reset".into())),
+            Ok(sample_ev()),
+        ]);
+        let h = tokio::spawn(forward_to_render(
+            s,
+            tx,
+            RuntimeFwdConfig {
+                buffer_size: 8,
+                lossy: false,
+                stats: None,
+                max_log_requests: 10,
+            },
+            metrics,
+            token.clone(),
+        ));
+
+        let mut lines = 0;
+        while let Some(cmd) = rx.recv().await {
+            if matches!(cmd, RenderCommand::Line(_)) {
+                lines += 1;
+                if lines == 2 {
+                    break;
+                }
+            }
+        }
+        token.cancel();
+        let _ = h.await;
+        assert!(stats.had_source_errors());
+    }
+
+    #[tokio::test]
+    async fn eof_and_cancelled_are_not_counted_as_source_errors() {
+        let stats = RunStats::new(false);
+        let metrics = LossyMetrics::new(Some(stats.clone()));
+        let (tx, _rx) = mpsc::channel::<RenderCommand>(8);
+        let token = CancellationToken::new();
+
+        let s = stream::iter(vec![
+            Err(LogSourceError::Eof),
+            Err(LogSourceError::Cancelled),
+        ]);
+        let h = tokio::spawn(forward_to_render(
+            s,
+            tx,
+            RuntimeFwdConfig {
+                buffer_size: 8,
+                lossy: false,
+                stats: None,
+                max_log_requests: 10,
+            },
+            metrics,
+            token.clone(),
+        ));
+        let _ = h.await;
+        assert!(!stats.had_source_errors());
     }
 
     #[test]
