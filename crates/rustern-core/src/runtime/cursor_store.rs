@@ -11,7 +11,7 @@ use crate::source::pod_log::PodLogRequest;
 
 pub(crate) const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
 
-const GET_LOCK_RETRIES: usize = 16;
+const LOCK_RETRIES: usize = 16;
 
 /// Last-seen log line timestamp per stream, used to resume follow streams after EOF.
 #[derive(Clone, Default)]
@@ -27,7 +27,7 @@ impl ReconnectCursorStore {
     }
 
     pub(crate) async fn get(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
-        for _ in 0..GET_LOCK_RETRIES {
+        for _ in 0..LOCK_RETRIES {
             match self.inner.try_lock() {
                 Ok(cursor) => return cursor.get(key).copied(),
                 Err(TryLockError::Poisoned(e)) => {
@@ -38,44 +38,61 @@ impl ReconnectCursorStore {
             }
             tokio::task::yield_now().await;
         }
-        tracing::trace!(key = ?key, "reconnect_cursor lock contended, skipping get");
+        tracing::warn!(key = ?key, "reconnect_cursor lock contended, skipping get after retries");
         None
     }
 
     pub(crate) fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
-        match self.inner.try_lock() {
-            Ok(mut cursor) => {
-                cursor.insert(key.clone(), timestamp);
-            }
-            Err(TryLockError::Poisoned(e)) => {
-                tracing::warn!(
-                    key = ?key,
-                    ?timestamp,
-                    error = %e,
-                    "reconnect_cursor lock poisoned, skipping record"
-                );
-            }
-            Err(TryLockError::WouldBlock) => {
-                tracing::trace!(
-                    key = ?key,
-                    "reconnect_cursor lock contended, skipping record"
-                );
-            }
+        let key = key.clone();
+        if self.try_cursor_mut_sync(&key, |cursor| {
+            cursor.insert(key.clone(), timestamp);
+        }) {
+            return;
         }
+        tracing::warn!(
+            key = ?key,
+            ?timestamp,
+            "reconnect_cursor lock contended, skipping record after retries"
+        );
     }
 
-    pub(crate) fn remove(&self, key: &SourceKey) {
-        match self.inner.try_lock() {
-            Ok(mut cursor) => {
-                cursor.remove(key);
+    pub(crate) async fn remove(&self, key: &SourceKey) {
+        for _ in 0..LOCK_RETRIES {
+            match self.inner.try_lock() {
+                Ok(mut cursor) => {
+                    cursor.remove(key);
+                    return;
+                }
+                Err(TryLockError::Poisoned(e)) => {
+                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping remove");
+                    return;
+                }
+                Err(TryLockError::WouldBlock) => {}
             }
-            Err(TryLockError::Poisoned(e)) => {
-                tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping remove");
-            }
-            Err(TryLockError::WouldBlock) => {
-                tracing::trace!(key = ?key, "reconnect_cursor lock contended, skipping cursor cleanup");
+            tokio::task::yield_now().await;
+        }
+        tracing::warn!(key = ?key, "reconnect_cursor lock contended, skipping remove after retries");
+    }
+
+    fn try_cursor_mut_sync(
+        &self,
+        key: &SourceKey,
+        mut op: impl FnMut(&mut HashMap<SourceKey, DateTime<Utc>>),
+    ) -> bool {
+        for _ in 0..LOCK_RETRIES {
+            match self.inner.try_lock() {
+                Ok(mut cursor) => {
+                    op(&mut cursor);
+                    return true;
+                }
+                Err(TryLockError::Poisoned(e)) => {
+                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned");
+                    return false;
+                }
+                Err(TryLockError::WouldBlock) => std::thread::yield_now(),
             }
         }
+        false
     }
 }
 
@@ -162,7 +179,7 @@ mod tests {
         assert!(store.get(&key).await.is_none());
         store.record(&key, ts);
         assert_eq!(store.get(&key).await, Some(ts));
-        store.remove(&key);
+        store.remove(&key).await;
         assert!(store.get(&key).await.is_none());
     }
 }
