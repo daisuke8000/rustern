@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::mux::MuxCmd;
-use super::watch::PodWatchCtx;
+use super::watch_ctx::PodWatchCtx;
 use crate::source::pod_log::{PodLogRequest, PodLogSource};
 use crate::source::{
     BoxedLogStream, ContextName, Labels, LogEvent, LogSource, LogSourceError, SourceKey,

@@ -15,8 +15,10 @@ mod config;
 mod forward;
 mod mux;
 mod pipeline;
+mod registry;
 mod run;
 mod watch;
+mod watch_ctx;
 
 pub use config::{
     CoreRunConfig, FormatterChoice, OutputMode, RunError, RunOutcome, RuntimeFwdConfig,
