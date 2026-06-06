@@ -97,12 +97,22 @@ impl ReconnectCursorStore {
 }
 
 pub(crate) fn overlap_since_time(last_timestamp: DateTime<Utc>) -> Option<Timestamp> {
-    last_timestamp
+    let serialized = last_timestamp
         .checked_sub_signed(CURSOR_RECONNECT_OVERLAP)
         .unwrap_or(last_timestamp)
-        .to_rfc3339_opts(SecondsFormat::Nanos, true)
-        .parse()
-        .ok()
+        .to_rfc3339_opts(SecondsFormat::Nanos, true);
+    match serialized.parse::<Timestamp>() {
+        Ok(ts) => Some(ts),
+        Err(e) => {
+            tracing::warn!(
+                %last_timestamp,
+                serialized = %serialized,
+                error = %e,
+                "failed to parse cursor overlap since_time"
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn pod_log_request_for_reopen(
@@ -110,12 +120,21 @@ pub(crate) fn pod_log_request_for_reopen(
     last_timestamp: Option<DateTime<Utc>>,
     reopen: bool,
 ) -> PodLogRequest {
+    pod_log_request_for_reopen_with_overlap(base, last_timestamp, reopen, overlap_since_time)
+}
+
+fn pod_log_request_for_reopen_with_overlap(
+    base: &PodLogRequest,
+    last_timestamp: Option<DateTime<Utc>>,
+    reopen: bool,
+    overlap: fn(DateTime<Utc>) -> Option<Timestamp>,
+) -> PodLogRequest {
     if !reopen {
         return base.clone();
     }
 
     let mut request = base.clone();
-    if let Some(since_time) = last_timestamp.and_then(overlap_since_time) {
+    if let Some(since_time) = last_timestamp.and_then(overlap) {
         request.tail = None;
         request.since_seconds = None;
         request.since_time = Some(since_time);
@@ -162,6 +181,22 @@ mod tests {
         assert!(req.since_seconds.is_none());
         let overlap_ts = req.since_time.unwrap().to_string();
         assert!(overlap_ts.contains("2026-04-28T08:00:04"));
+    }
+
+    #[test]
+    fn reopen_keeps_base_when_overlap_returns_none() {
+        let base = PodLogRequest {
+            follow: true,
+            tail: Some(25),
+            since_seconds: Some(300),
+            ..Default::default()
+        };
+        let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
+        let req = pod_log_request_for_reopen_with_overlap(&base, Some(ts), true, |_| None);
+
+        assert_eq!(req.tail, Some(25));
+        assert_eq!(req.since_seconds, Some(300));
+        assert!(req.since_time.is_none());
     }
 
     #[tokio::test]
