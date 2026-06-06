@@ -249,7 +249,8 @@ pub struct Cli {
         long = "stats-interval",
         default_value = "30s",
         value_name = "DURATION",
-        value_parser = parse_stats_interval
+        value_parser = parse_stats_interval,
+        requires = "stats"
     )]
     pub stats_interval: Duration,
 

@@ -87,6 +87,7 @@ impl RunStats {
     pub async fn stderr_reporter(self: Arc<Self>, interval: Duration, token: CancellationToken) {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await;
         let mut stderr = tokio::io::stderr();
         loop {
             tokio::select! {
@@ -175,10 +176,16 @@ pub async fn forward_to_render(
         match item {
             Ok(ev) => {
                 if cfg.lossy {
-                    if tx.try_send(RenderCommand::Line(ev)).is_err() {
-                        metrics.record_drop("channel_full").await;
-                    } else if let Some(stats) = &metrics.stats {
-                        stats.record_forwarded_line();
+                    match tx.try_send(RenderCommand::Line(ev)) {
+                        Ok(()) => {
+                            if let Some(stats) = &metrics.stats {
+                                stats.record_forwarded_line();
+                            }
+                        }
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            metrics.record_drop("channel_full").await;
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => break,
                     }
                 } else if tx.send(RenderCommand::Line(ev)).await.is_err() {
                     break;
