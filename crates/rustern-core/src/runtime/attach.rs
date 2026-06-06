@@ -17,6 +17,7 @@ use crate::source::{
 };
 
 const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
+const MAX_REOPEN_START_RETRIES: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum StreamEnd {
@@ -142,6 +143,7 @@ impl Drop for CursorTrackingStream {
 
 async fn attach_pod_log_stream(p: AttachPodLogParams) {
     let mut reopen = false;
+    let mut reopen_start_failures = 0u32;
 
     loop {
         if p.pod_token.is_cancelled() || p.ctx.root_child.is_cancelled() {
@@ -179,6 +181,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
         let client = p.ctx.client.clone();
         match PodLogSource::start(client, p.meta.clone(), p.pod_token.clone(), request).await {
             Ok(src) => {
+                reopen_start_failures = 0;
                 let (done_tx, done_rx) = oneshot::channel();
                 let stream = Box::new(CursorTrackingStream::new(
                     Box::new(src).into_stream(),
@@ -215,9 +218,17 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
                     && p.ctx.pod_log.follow
                     && !p.pod_token.is_cancelled()
                     && !p.ctx.root_child.is_cancelled()
+                    && reopen_start_failures < MAX_REOPEN_START_RETRIES
                 {
+                    reopen_start_failures += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     continue;
+                }
+                if reopen_start_failures >= MAX_REOPEN_START_RETRIES {
+                    tracing::warn!(
+                        retries = MAX_REOPEN_START_RETRIES,
+                        "cursor reconnect start retries exhausted"
+                    );
                 }
                 return;
             }
