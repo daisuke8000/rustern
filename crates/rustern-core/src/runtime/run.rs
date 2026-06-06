@@ -179,8 +179,6 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let pipe_h = spawn_pipeline_forward_task(
         raw_event_rx,
         PipelineStages {
-            container_incl: container_incl.clone(),
-            container_excl: container_excl.clone(),
             includes: includes.clone(),
             excludes: excludes.clone(),
             filter_on: cfg.filter_on,

@@ -5,8 +5,8 @@ use regex::Regex;
 
 use crate::pipeline::{
     ColorAssignOpts, CompiledFilter, ExitOnLevel, ExitWatchState, FilterOn, PipelineStageOrder,
-    QueryMode, color_assign, container_filter, exit_watch_level, exit_watch_message,
-    include_exclude, jq_evaluate, json_annotate, level_classify,
+    QueryMode, color_assign, exit_watch_level, exit_watch_message, include_exclude, jq_evaluate,
+    json_annotate, level_classify,
 };
 use crate::source::{LogEvent, LogSourceError};
 
@@ -16,8 +16,6 @@ pub(super) fn compile_list(p: &[String]) -> Result<Vec<Regex>, regex::Error> {
 
 #[doc(hidden)]
 pub struct PipelineStages {
-    pub container_incl: Regex,
-    pub container_excl: Vec<Regex>,
     pub includes: Vec<Regex>,
     pub excludes: Vec<Regex>,
     pub filter_on: FilterOn,
@@ -38,8 +36,6 @@ where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
 {
     let PipelineStages {
-        container_incl,
-        container_excl,
         includes,
         excludes,
         filter_on,
@@ -63,12 +59,6 @@ where
     if order.include_before_container {
         s = Box::pin(include_exclude(s, includes.clone(), excludes.clone()));
     }
-
-    s = Box::pin(container_filter(
-        s,
-        container_incl.clone(),
-        container_excl.clone(),
-    ));
 
     if !order.exit_on_message_before_filters && !exit_on.is_empty() {
         s = Box::pin(exit_watch_message(s, exit_on, exit_watch.clone()));
@@ -131,8 +121,6 @@ mod tests {
 
     fn base_stages(token: CancellationToken) -> PipelineStages {
         PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![Regex::new("visible").unwrap()],
             excludes: vec![],
             filter_on: FilterOn::Original,
@@ -170,8 +158,6 @@ mod tests {
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![Regex::new("visible").unwrap()],
             excludes: vec![],
             filter_on: FilterOn::Original,
@@ -204,8 +190,6 @@ mod tests {
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![],
             excludes: vec![],
             filter_on: FilterOn::Original,
@@ -238,8 +222,6 @@ mod tests {
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![Regex::new("^\\{").unwrap()],
             excludes: vec![],
             filter_on: FilterOn::Original,
@@ -275,8 +257,6 @@ mod tests {
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![Regex::new("visible").unwrap()],
             excludes: vec![],
             filter_on: FilterOn::Transformed,
@@ -311,8 +291,6 @@ mod tests {
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
         let stages = PipelineStages {
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
             includes: vec![Regex::new("\"visible").unwrap()],
             excludes: vec![],
             filter_on: FilterOn::Transformed,

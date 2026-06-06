@@ -7,8 +7,7 @@ use regex::Regex;
 use rustern_core::format_display::{TimestampStyle, TimestampZone};
 use rustern_core::parse_log_line;
 use rustern_core::pipeline::{
-    QueryMode, container_filter, include_exclude, jq_evaluate, json_annotate, level_classify,
-    validate_filter,
+    QueryMode, include_exclude, jq_evaluate, json_annotate, level_classify, validate_filter,
 };
 use rustern_core::render::LineFormatter;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
@@ -93,35 +92,6 @@ fn bench_include_exclude(c: &mut Criterion) {
             });
         });
     }
-    group.finish();
-}
-
-fn bench_container_filter(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let mut group = c.benchmark_group("container_filter");
-    group.throughput(Throughput::Elements(BATCH));
-
-    let batch = event_batch(&plain_message_256());
-    let include = Regex::new("app|sidecar").unwrap();
-    let excludes = vec![Regex::new("istio-proxy").unwrap()];
-
-    group.bench_function("filter", |b| {
-        b.iter(|| {
-            let events = batch.clone();
-            let include = include.clone();
-            let excludes = excludes.clone();
-            let out = rt.block_on(async move {
-                container_filter(
-                    stream::iter(events.into_iter().map(Ok::<_, LogSourceError>)),
-                    include,
-                    excludes,
-                )
-                .collect::<Vec<_>>()
-                .await
-            });
-            black_box(out);
-        });
-    });
     group.finish();
 }
 
@@ -213,7 +183,6 @@ fn bench_parse_log_line(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_include_exclude,
-    bench_container_filter,
     bench_json_pipeline,
     bench_default_formatter,
     bench_highlight_formatter,
