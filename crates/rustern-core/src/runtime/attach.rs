@@ -17,6 +17,7 @@ use crate::source::{
 };
 
 const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
+const MAX_REOPEN_START_RETRIES: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum StreamEnd {
@@ -63,11 +64,11 @@ fn pod_log_request_for_open(
     }
 
     let mut request = base.clone();
-    request.tail = None;
-    request.since_seconds = None;
-    request.since_time = last_timestamp
-        .and_then(overlap_since_time)
-        .or(base.since_time);
+    if let Some(since_time) = last_timestamp.and_then(overlap_since_time) {
+        request.tail = None;
+        request.since_seconds = None;
+        request.since_time = Some(since_time);
+    }
     request
 }
 
@@ -142,6 +143,7 @@ impl Drop for CursorTrackingStream {
 
 async fn attach_pod_log_stream(p: AttachPodLogParams) {
     let mut reopen = false;
+    let mut reopen_start_failures = 0u32;
 
     loop {
         if p.pod_token.is_cancelled() || p.ctx.root_child.is_cancelled() {
@@ -179,6 +181,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
         let client = p.ctx.client.clone();
         match PodLogSource::start(client, p.meta.clone(), p.pod_token.clone(), request).await {
             Ok(src) => {
+                reopen_start_failures = 0;
                 let (done_tx, done_rx) = oneshot::channel();
                 let stream = Box::new(CursorTrackingStream::new(
                     Box::new(src).into_stream(),
@@ -210,6 +213,23 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
             Err(e) => {
                 tracing::warn!(?e, "pod log start");
                 drop(permit);
+                if reopen
+                    && p.ctx.cursor_reconnect
+                    && p.ctx.pod_log.follow
+                    && !p.pod_token.is_cancelled()
+                    && !p.ctx.root_child.is_cancelled()
+                    && reopen_start_failures < MAX_REOPEN_START_RETRIES
+                {
+                    reopen_start_failures += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    continue;
+                }
+                if reopen_start_failures >= MAX_REOPEN_START_RETRIES {
+                    tracing::warn!(
+                        retries = MAX_REOPEN_START_RETRIES,
+                        "cursor reconnect start retries exhausted"
+                    );
+                }
                 return;
             }
         }
@@ -254,6 +274,21 @@ mod tests {
             container: "app".into(),
             uid: "uid-1".into(),
         }
+    }
+
+    #[test]
+    fn reopen_without_cursor_keeps_initial_tail_and_since() {
+        let base = PodLogRequest {
+            follow: true,
+            tail: Some(25),
+            since_seconds: Some(300),
+            ..Default::default()
+        };
+        let req = pod_log_request_for_open(&base, None, true);
+
+        assert_eq!(req.tail, Some(25));
+        assert_eq!(req.since_seconds, Some(300));
+        assert!(req.since_time.is_none());
     }
 
     #[test]
