@@ -153,6 +153,7 @@ reviews:
       - "WIP"
       - "[skip review]"
     ignore_usernames:
+      - "app/dependabot"
       - "dependabot[bot]"
       - "renovate[bot]"
 
