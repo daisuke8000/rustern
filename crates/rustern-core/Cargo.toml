@@ -41,3 +41,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 [[bench]]
 name = "hot_path"
 harness = false
+
+[[bench]]
+name = "mux_forward"
+harness = false

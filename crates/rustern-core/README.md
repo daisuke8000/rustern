@@ -253,6 +253,21 @@ See `src/lib.rs` for the full re-export list.
 | Unit | `#[cfg(test)]` in `src/**/*.rs` |
 | Integration | `tests/` (mock API, retries, cancellation, E2E smoke, …) |
 
+### Performance harness
+
+```bash
+# Unit hot-path microbenches (pipeline, render, parse)
+cargo bench -p rustern-core --bench hot_path
+
+# Mux and forward throughput (synthetic streams, no kube)
+cargo bench -p rustern-core --bench mux_forward
+
+# Multi-stream soak (CI default 3k lines; raise locally for throughput exercises)
+RUSTERN_LOAD_LINES=100000 cargo test -p rustern-core --test load_multistream
+```
+
+Capture baseline numbers in the PR when changing hot-path code; committed criterion thresholds are optional follow-up.
+
 ## v0.1 scope and notes
 
 - Log sources focus on pod logs; other `SourceKind` variants are not implemented.
