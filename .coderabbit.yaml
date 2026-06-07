@@ -21,7 +21,7 @@ reviews:
 
   instructions: |
     rustern: multi-pod Kubernetes log tailer; stern/kubectl behavioral parity is the north star.
-    Read .github/copilot-instructions.md (including Cumulative CodeRabbit learnings) for full standards.
+    Read .github/copilot-instructions.md (including Review themes) for full standards.
     Do not comment on rustfmt/style already enforced in CI.
     Prioritize correctness, async/cancellation, kube client usage, resource leaks, and parity regressions.
     Review comments in Japanese; keep code identifiers and API names in English.
@@ -36,42 +36,31 @@ reviews:
         Kubernetes discovery and pod watching:
         - Watch gaps, stale cache, and reconcile correctness when pods/containers change.
         - Namespace and label/field selector behavior must match stern/kubectl parity expectations.
-        - `--field-selector` with explicit `.` pod query must normalize `.` → `.*`; require regression tests for selector+query combos.
+        - Default and selector resolution edge cases need regression tests.
         - Handle kube API errors without panicking; avoid unbounded retries.
         - Flag RBAC-sensitive assumptions and cross-namespace leaks.
-
-    - path: "crates/rustern-core/src/runtime/cursor_store.rs"
-      instructions: |
-        Reconnect cursor store:
-        - No blocking Mutex::lock from async or Stream::poll_next; use try_lock + bounded yield/spin only.
-        - Distinguish poisoned mutex (warn once, no retry) from contention (retry then warn).
-        - Do not suggest tokio::Mutex or new deps unless PR already adds them for a documented reason.
 
     - path: "crates/rustern-core/src/runtime/**"
       instructions: |
         Runtime (attach, mux, watch, run):
         - Cancellation and stream shutdown must not leak tasks or leave hung attaches.
-        - No blocking I/O inside async contexts; verify backpressure on multiplexed log streams.
+        - No blocking I/O or blocking locks inside async contexts or stream polling.
         - Race conditions when pods restart or containers churn.
-        - Watch orchestration: WatchAdmission vs AttachDeps; PodMetaCache methods only—no exposed HashMap in callers.
-        - admit_pod: false when metadata.name missing (and namespace when allowed_ns set)—no empty-string fallback.
-        - pod_meta cache: Init clears, InitDone prunes snapshot outsiders, reject/delete removes entries.
-        - TestOrchestratorFixture keepalive (mock handle + mux drain) must outlive tests; `_fixture` tuple bindings are intentional.
-        - Skip nitpicks on TestOrchestratorBuilder sugar or post-build fixture mutation unless they hide real bugs.
+        - In-memory caches and metadata: prune at lifecycle boundaries; expose via narrow APIs.
+        - Intentional test fixture lifetimes and background drains are not dead code.
 
     - path: "crates/rustern-core/src/pipeline/**"
       instructions: |
         Log pipeline and filtering:
         - Line handling, include/exclude, jq, and JSON annotation correctness.
-        - Exit trigger ordering: FilterOn::Original + --exit-on-level must not evaluate -i/-e only after jq in ways that break stern semantics.
-        - Keep stage_order and helpers pub(crate) unless public API is intentional.
+        - Stage order affects exit and filter semantics; behavior changes need explicit parity justification.
         - Performance on hot paths (per-line allocations, regex reuse).
 
     - path: "crates/rustern-core/src/source/**"
       instructions: |
-        Log sources and pod metadata:
+        Log sources (pod logs):
         - PodLogRequest / follow semantics and error paths.
-        - PodLocator::try_from_pod requires name, namespace, uid—no default empty namespace.
+        - Require complete pod identity metadata; no silent defaults for missing fields.
         - Compatibility with kube client streaming APIs.
 
     - path: "src/cli/**"
@@ -94,9 +83,8 @@ reviews:
     - path: ".github/copilot-instructions.md"
       instructions: |
         Review guidance doc:
-        - Source comments English; review comments Japanese.
-        - Public PRs: Linear ID only, no Linear URLs; branch naming feat|fix|refactor|chore/dsk-<id>-<desc>.
-        - Keep cumulative learnings section updated when recurring review themes appear.
+        - Keep rules general; avoid encoding one-off implementation recipes.
+        - Update Review themes when the same feedback recurs across PRs.
 
     - path: "**/*.rs"
       instructions: |
@@ -106,7 +94,7 @@ reviews:
         - Do not duplicate rustfmt/style feedback covered by CI.
         - Source code comments must be in English; review comments should stay Japanese (language: ja-JP).
         - No drive-by refactors unrelated to the PR.
-        - Test set comparisons for containers/streams should be order-independent (HashSet).
+        - Unordered test assertions should use set semantics, not slice order.
 
     - path: ".github/workflows/**"
       instructions: |
