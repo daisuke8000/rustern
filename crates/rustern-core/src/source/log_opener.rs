@@ -1,0 +1,108 @@
+use std::future::Future;
+use std::pin::Pin;
+
+use kube::Client;
+use tokio_util::sync::CancellationToken;
+
+use super::pod_log::{PodLogRequest, PodLogSource};
+use super::{LogSource, LogSourceError, SourceMeta};
+
+#[cfg(test)]
+use std::sync::Arc;
+
+#[cfg(test)]
+use super::BoxedLogStream;
+
+pub(crate) trait LogSourceOpener: Send + Sync {
+    fn open(
+        &self,
+        meta: SourceMeta,
+        token: CancellationToken,
+        request: PodLogRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>>;
+}
+
+pub(crate) struct PodLogSourceOpener {
+    client: Client,
+}
+
+impl PodLogSourceOpener {
+    pub(crate) fn new(client: Client) -> Self {
+        Self { client }
+    }
+}
+
+impl LogSourceOpener for PodLogSourceOpener {
+    fn open(
+        &self,
+        meta: SourceMeta,
+        token: CancellationToken,
+        request: PodLogRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
+        let client = self.client.clone();
+        Box::pin(async move {
+            let src = PodLogSource::start(client, meta, token, request).await?;
+            Ok(Box::new(src) as Box<dyn LogSource>)
+        })
+    }
+}
+
+#[cfg(test)]
+struct ScriptLogSource {
+    meta: Arc<SourceMeta>,
+    token: CancellationToken,
+    inner: BoxedLogStream,
+}
+
+#[cfg(test)]
+impl LogSource for ScriptLogSource {
+    fn meta(&self) -> &SourceMeta {
+        self.meta.as_ref()
+    }
+
+    fn cancellation_token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+
+    fn into_stream(self: Box<Self>) -> BoxedLogStream {
+        self.inner
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct ScriptLogSourceOpener {
+    scripts: std::sync::Mutex<Vec<Vec<Result<super::LogEvent, LogSourceError>>>>,
+}
+
+#[cfg(test)]
+impl ScriptLogSourceOpener {
+    pub(crate) fn new(scripts: Vec<Vec<Result<super::LogEvent, LogSourceError>>>) -> Arc<Self> {
+        Arc::new(Self {
+            scripts: std::sync::Mutex::new(scripts),
+        })
+    }
+}
+
+#[cfg(test)]
+impl LogSourceOpener for ScriptLogSourceOpener {
+    fn open(
+        &self,
+        meta: SourceMeta,
+        token: CancellationToken,
+        _request: PodLogRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
+        let script = {
+            let mut scripts = self.scripts.lock().expect("script queue");
+            if scripts.is_empty() {
+                Vec::new()
+            } else {
+                scripts.remove(0)
+            }
+        };
+        Box::pin(async move {
+            let meta = Arc::new(meta);
+            let inner: BoxedLogStream = Box::pin(futures::stream::iter(script.into_iter()));
+            Ok(Box::new(ScriptLogSource { meta, token, inner }) as Box<dyn LogSource>)
+        })
+    }
+}

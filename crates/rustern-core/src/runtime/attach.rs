@@ -10,10 +10,7 @@ use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_ctx::PodWatchCtx;
 use crate::source::ContextName;
-use crate::source::pod_log::PodLogSource;
-use crate::source::{
-    BoxedLogStream, LogEvent, LogSource, LogSourceError, SourceKey, SourceKind, SourceMeta,
-};
+use crate::source::{BoxedLogStream, LogEvent, LogSourceError, SourceKey, SourceKind, SourceMeta};
 
 const MAX_REOPEN_START_RETRIES: u32 = 5;
 
@@ -147,13 +144,18 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
             }
         };
 
-        let client = p.ctx.attach.client.clone();
-        match PodLogSource::start(client, p.meta.clone(), p.pod_token.clone(), request).await {
+        match p
+            .ctx
+            .attach
+            .log_opener
+            .open(p.meta.clone(), p.pod_token.clone(), request)
+            .await
+        {
             Ok(src) => {
                 reopen_start_failures = 0;
                 let (done_tx, done_rx) = oneshot::channel();
                 let stream = Box::new(CursorTrackingStream::new(
-                    Box::new(src).into_stream(),
+                    src.into_stream(),
                     p.key.clone(),
                     p.pod_token.clone(),
                     p.ctx.attach.reconnect_cursor.clone(),
@@ -343,7 +345,7 @@ mod tests {
                 ..base.admission.clone()
             },
             attach: AttachDeps {
-                client,
+                log_opener: Arc::new(crate::source::log_opener::PodLogSourceOpener::new(client)),
                 ..base.attach.clone()
             },
         });
@@ -413,5 +415,89 @@ mod tests {
         );
 
         server.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reconnects_follow_with_script_opener_without_kube_mock() {
+        use chrono::{TimeZone, Utc};
+
+        use crate::source::log_opener::ScriptLogSourceOpener;
+
+        let key = sample_key();
+        let base_meta = SourceMeta {
+            context: key.context.clone(),
+            namespace: key.namespace.clone(),
+            pod: key.pod.clone(),
+            container: key.container.clone(),
+            kind: SourceKind::PodLog,
+            node: None,
+            labels: Arc::new(crate::source::Labels::default()),
+            uid: key.uid.clone(),
+        };
+        let ts1 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
+        let ts2 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 6).unwrap();
+        let ev1 = LogEvent {
+            source: Arc::new(base_meta.clone()),
+            timestamp: ts1,
+            message: Arc::from("first"),
+            structured: None,
+            level: None,
+            palette_index: None,
+            container_palette_index: None,
+        };
+        let ev2 = LogEvent {
+            source: Arc::new(base_meta),
+            timestamp: ts2,
+            message: Arc::from("second"),
+            structured: None,
+            level: None,
+            palette_index: None,
+            container_palette_index: None,
+        };
+
+        let (mux_tx, mut mux_rx) = mpsc::channel(8);
+        let pod_token = CancellationToken::new();
+        let fixture = TestOrchestratorBuilder::new()
+            .mux_tx(mux_tx)
+            .pod_log(PodLogRequest {
+                follow: true,
+                ..Default::default()
+            })
+            .cursor_reconnect(true)
+            .sem_permits(8)
+            .build();
+        let ctx = Arc::new(PodWatchCtx {
+            attach: AttachDeps {
+                log_opener: ScriptLogSourceOpener::new(vec![vec![Ok(ev1)], vec![Ok(ev2)]]),
+                ..fixture.attach.clone()
+            },
+            ..fixture.arc().as_ref().clone()
+        });
+
+        spawn_attach_pod_log(&ctx, key, pod_token.clone());
+
+        let Some(MuxCmd::Add(_, first_stream)) = mux_rx.recv().await else {
+            panic!("missing first attach");
+        };
+        let first_events: Vec<_> = first_stream.collect().await;
+        assert_eq!(first_events.len(), 1);
+        assert_eq!(&*first_events[0].as_ref().unwrap().message, "first");
+
+        let Some(MuxCmd::Add(_, mut second_stream)) = mux_rx.recv().await else {
+            panic!("missing reconnect attach");
+        };
+        let second_ev = second_stream
+            .next()
+            .await
+            .expect("second stream ended without events")
+            .expect("second stream error");
+        assert_eq!(&*second_ev.message, "second");
+
+        pod_token.cancel();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), mux_rx.recv())
+                .await
+                .is_err()
+        );
     }
 }

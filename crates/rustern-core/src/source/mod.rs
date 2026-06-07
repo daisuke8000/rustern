@@ -8,6 +8,7 @@ use futures::Stream;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+pub mod log_opener;
 pub mod pod_log;
 pub mod pod_meta;
 

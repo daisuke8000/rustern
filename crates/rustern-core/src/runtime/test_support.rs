@@ -16,6 +16,7 @@ use crate::discovery::pod_watcher::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
 use crate::source::ContextName;
+use crate::source::log_opener::PodLogSourceOpener;
 use crate::source::pod_log::PodLogRequest;
 
 type MockHandle =
@@ -135,7 +136,7 @@ impl TestOrchestratorBuilder {
             },
             attach: AttachDeps {
                 mux_tx,
-                client: kube::Client::new(mock, "default"),
+                log_opener: Arc::new(PodLogSourceOpener::new(kube::Client::new(mock, "default"))),
                 root_child: CancellationToken::new(),
                 pod_log: self.pod_log,
                 cursor_reconnect: self.cursor_reconnect,
