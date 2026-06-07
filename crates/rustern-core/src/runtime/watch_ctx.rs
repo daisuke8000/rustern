@@ -1,19 +1,19 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Pod;
 use regex::Regex;
-use tokio::sync::{RwLock, Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::cursor_store::ReconnectCursorStore;
 use super::mux::MuxCmd;
+use super::pod_meta_cache::PodMetaCache;
 use crate::discovery::pod_condition::{PodConditionFilter, pod_matches_condition};
 use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod};
 use crate::source::ContextName;
 use crate::source::SourceKey;
 use crate::source::pod_log::PodLogRequest;
-use crate::source::pod_meta::{PodLocator, PodMetaSnapshot};
 
 /// Event-time pod and container admission policy for the watch loop.
 #[derive(Clone)]
@@ -90,7 +90,7 @@ pub(crate) struct AttachDeps {
     pub(crate) reconnect_cursor: ReconnectCursorStore,
     pub(crate) sem: Arc<Semaphore>,
     pub(crate) follow_limit_notifier: Option<mpsc::Sender<()>>,
-    pub(crate) pod_meta: Arc<RwLock<HashMap<PodLocator, PodMetaSnapshot>>>,
+    pub(crate) pod_meta: PodMetaCache,
 }
 
 /// Composed watch orchestration context: admission policy plus attach/runtime deps.

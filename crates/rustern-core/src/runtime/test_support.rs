@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::cursor_store::ReconnectCursorStore;
 use super::mux::MuxCmd;
-use super::pod_meta_cache::new_pod_meta_cache;
+use super::pod_meta_cache::PodMetaCache;
 use super::watch_ctx::{AttachDeps, PodWatchCtx, WatchAdmission};
 use crate::discovery::pod_watcher::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
@@ -43,10 +43,6 @@ impl Deref for TestOrchestratorFixture {
 impl TestOrchestratorFixture {
     pub(crate) fn arc(&self) -> Arc<PodWatchCtx> {
         Arc::clone(&self.inner)
-    }
-
-    pub(crate) fn ctx_mut(&mut self) -> &mut PodWatchCtx {
-        Arc::make_mut(&mut self.inner)
     }
 }
 
@@ -146,7 +142,7 @@ impl TestOrchestratorBuilder {
                 reconnect_cursor: ReconnectCursorStore::new(),
                 sem: Arc::new(Semaphore::new(self.sem_permits)),
                 follow_limit_notifier: None,
-                pod_meta: new_pod_meta_cache(),
+                pod_meta: PodMetaCache::new(),
             },
         };
         TestOrchestratorFixture {

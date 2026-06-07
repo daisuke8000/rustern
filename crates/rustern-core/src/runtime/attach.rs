@@ -7,8 +7,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::cursor_store::{ReconnectCursorStore, pod_log_request_for_reopen};
 use super::mux::MuxCmd;
-use super::pod_meta_cache::lookup_pod_meta;
+use super::pod_meta_cache::PodMetaCache;
 use super::watch_ctx::PodWatchCtx;
+use crate::source::ContextName;
 use crate::source::pod_log::PodLogSource;
 use crate::source::{
     BoxedLogStream, LogEvent, LogSource, LogSourceError, SourceKey, SourceKind, SourceMeta,
@@ -29,10 +30,14 @@ struct AttachPodLogParams {
     key: SourceKey,
 }
 
-async fn source_meta_for_key(ctx: &PodWatchCtx, key: &SourceKey) -> SourceMeta {
-    let snap = lookup_pod_meta(ctx, key).await;
+async fn source_meta_for_key(
+    context: &ContextName,
+    cache: &PodMetaCache,
+    key: &SourceKey,
+) -> SourceMeta {
+    let snap = cache.lookup(key).await;
     SourceMeta {
-        context: ctx.admission.context_name.clone(),
+        context: context.clone(),
         namespace: key.namespace.clone(),
         pod: key.pod.clone(),
         container: key.container.clone(),
@@ -208,7 +213,8 @@ pub(crate) fn spawn_attach_pod_log(
 ) {
     let ctx = Arc::clone(ctx);
     tokio::spawn(async move {
-        let meta = source_meta_for_key(ctx.as_ref(), &key).await;
+        let meta =
+            source_meta_for_key(&ctx.admission.context_name, &ctx.attach.pod_meta, &key).await;
         attach_pod_log_stream(AttachPodLogParams {
             ctx,
             meta,
@@ -226,7 +232,6 @@ mod tests {
 
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
-    use crate::runtime::pod_meta_cache::update_pod_meta_cache;
     use crate::runtime::test_support::TestOrchestratorBuilder;
     use crate::runtime::watch_ctx::{AttachDeps, PodWatchCtx, WatchAdmission};
     use crate::source::ContextName;
@@ -252,6 +257,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_meta_for_key_without_kube_mock() {
+        use crate::source::Labels;
+        use crate::source::pod_meta::{PodLocator, PodMetaSnapshot};
+
+        let key = sample_key();
+        let mut labels = BTreeMap::new();
+        labels.insert("app".into(), "api".into());
+        let cache = PodMetaCache::with_entry(
+            PodLocator::from_source_key(&key),
+            PodMetaSnapshot {
+                node: Some("worker-1".into()),
+                labels: Labels(labels),
+            },
+        );
+        let meta = source_meta_for_key(&ContextName("ctx".into()), &cache, &key).await;
+        assert_eq!(meta.node.as_deref(), Some("worker-1"));
+        assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
+    }
+
+    #[tokio::test]
     async fn source_meta_for_key_uses_cached_pod_labels_and_node() {
         let mut labels = BTreeMap::new();
         labels.insert("app".into(), "api".into());
@@ -270,9 +295,18 @@ mod tests {
             ..Default::default()
         };
         let fixture = TestOrchestratorBuilder::new().build();
-        update_pod_meta_cache(&fixture, &pod).await;
+        fixture
+            .attach
+            .pod_meta
+            .update_from_pod(&fixture.admission.context_name, &pod)
+            .await;
 
-        let meta = source_meta_for_key(&fixture, &sample_key()).await;
+        let meta = source_meta_for_key(
+            &fixture.admission.context_name,
+            &fixture.attach.pod_meta,
+            &sample_key(),
+        )
+        .await;
         assert_eq!(meta.node.as_deref(), Some("worker-1"));
         assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
     }

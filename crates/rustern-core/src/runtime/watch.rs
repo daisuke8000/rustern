@@ -8,9 +8,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::mux::MuxCmd;
-use super::pod_meta_cache::{
-    clear_pod_meta_cache, prune_pod_meta_cache, remove_pod_meta_cache, update_pod_meta_cache,
-};
 use super::registry::PodStreamRegistry;
 use super::watch_ctx::PodWatchCtx;
 use crate::source::pod_meta::PodLocator;
@@ -39,19 +36,31 @@ where
                     };
                     match ev {
                         Event::Delete(pod) => {
-                            remove_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
+                            watch_ctx
+                                .attach
+                                .pod_meta
+                                .remove_pod(&watch_ctx.admission.context_name, &pod)
+                                .await;
                             registry
                                 .remove_pod(&pod, watch_ctx.as_ref(), &mux_tx_w)
                                 .await;
                         }
                         Event::Apply(pod) => {
                             if !watch_ctx.admission.admit_pod(&pod) {
-                                remove_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
+                                watch_ctx
+                                    .attach
+                                    .pod_meta
+                                    .remove_pod(&watch_ctx.admission.context_name, &pod)
+                                    .await;
                                 registry
                                     .remove_pod(&pod, watch_ctx.as_ref(), &mux_tx_w)
                                     .await;
                             } else {
-                                update_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
+                                watch_ctx
+                                    .attach
+                                    .pod_meta
+                                    .update_from_pod(&watch_ctx.admission.context_name, &pod)
+                                    .await;
                                 let desired = watch_ctx
                                     .admission
                                     .admit_streams(&pod)
@@ -64,10 +73,14 @@ where
                         }
                         Event::Init => {
                             pending_pods.clear();
-                            clear_pod_meta_cache(watch_ctx.as_ref()).await;
+                            watch_ctx.attach.pod_meta.clear().await;
                         }
                         Event::InitApply(pod) => {
-                            update_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
+                            watch_ctx
+                                .attach
+                                .pod_meta
+                                .update_from_pod(&watch_ctx.admission.context_name, &pod)
+                                .await;
                             pending_pods.push(pod);
                         }
                         Event::InitDone => {
@@ -78,7 +91,7 @@ where
                                 .iter()
                                 .map(PodLocator::from_source_key)
                                 .collect();
-                            prune_pod_meta_cache(watch_ctx.as_ref(), &keep).await;
+                            watch_ctx.attach.pod_meta.prune(&keep).await;
                             registry.reconcile_snapshot(snap, &watch_ctx).await;
                         }
                     }
