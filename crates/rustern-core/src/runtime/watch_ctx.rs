@@ -13,6 +13,7 @@ use crate::discovery::pod_condition::{PodConditionFilter, pod_matches_condition}
 use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod};
 use crate::source::ContextName;
 use crate::source::SourceKey;
+use crate::source::log_opener::LogSourceOpener;
 use crate::source::pod_log::PodLogRequest;
 
 /// Event-time pod and container admission policy for the watch loop.
@@ -83,7 +84,7 @@ impl WatchAdmission {
 #[derive(Clone)]
 pub(crate) struct AttachDeps {
     pub(crate) mux_tx: mpsc::Sender<MuxCmd>,
-    pub(crate) client: kube::Client,
+    pub(crate) log_opener: Arc<dyn LogSourceOpener>,
     pub(crate) root_child: CancellationToken,
     pub(crate) pod_log: PodLogRequest,
     pub(crate) cursor_reconnect: bool,

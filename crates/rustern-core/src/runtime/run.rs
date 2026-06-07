@@ -27,6 +27,7 @@ use crate::pipeline::ExitWatchState;
 use crate::pipeline::validate_filter;
 use crate::render::setup::{RenderSetupError, build_line_formatter, color_assign_opts};
 use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
+use crate::source::log_opener::PodLogSourceOpener;
 use crate::source::{ContextName, LogEvent, LogSourceError};
 
 fn spawn_render_task(
@@ -208,7 +209,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
             exclude_pod,
         },
         attach: AttachDeps {
-            client,
+            log_opener: Arc::new(PodLogSourceOpener::new(client)),
             root_child: cfg.root_token.clone(),
             pod_log: cfg.pod_log.clone(),
             cursor_reconnect: cfg.cursor_reconnect,
