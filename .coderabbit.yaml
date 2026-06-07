@@ -21,10 +21,11 @@ reviews:
 
   instructions: |
     rustern: multi-pod Kubernetes log tailer; stern/kubectl behavioral parity is the north star.
-    Read .github/copilot-instructions.md for full standards.
+    Read .github/copilot-instructions.md (including Review themes) for full standards.
     Do not comment on rustfmt/style already enforced in CI.
     Prioritize correctness, async/cancellation, kube client usage, resource leaks, and parity regressions.
     Review comments in Japanese; keep code identifiers and API names in English.
+    Review skipped status does not mean zero actionable inline comments.
 
   path_filters:
     - "!target/**"
@@ -35,6 +36,7 @@ reviews:
         Kubernetes discovery and pod watching:
         - Watch gaps, stale cache, and reconcile correctness when pods/containers change.
         - Namespace and label/field selector behavior must match stern/kubectl parity expectations.
+        - Default and selector resolution edge cases need regression tests.
         - Handle kube API errors without panicking; avoid unbounded retries.
         - Flag RBAC-sensitive assumptions and cross-namespace leaks.
 
@@ -42,21 +44,23 @@ reviews:
       instructions: |
         Runtime (attach, mux, watch, run):
         - Cancellation and stream shutdown must not leak tasks or leave hung attaches.
-        - No blocking I/O inside async contexts; verify backpressure on multiplexed log streams.
+        - No blocking I/O or blocking locks inside async contexts or stream polling.
         - Race conditions when pods restart or containers churn.
-        - Prefer semantic bugs types alone will not catch.
+        - In-memory caches and metadata: prune at lifecycle boundaries; expose via narrow APIs.
+        - Intentional test fixture lifetimes and background drains are not dead code.
 
     - path: "crates/rustern-core/src/pipeline/**"
       instructions: |
         Log pipeline and filtering:
         - Line handling, include/exclude, jq, and JSON annotation correctness.
-        - Behavior changes vs stern filtering semantics need explicit justification.
+        - Stage order affects exit and filter semantics; behavior changes need explicit parity justification.
         - Performance on hot paths (per-line allocations, regex reuse).
 
     - path: "crates/rustern-core/src/source/**"
       instructions: |
         Log sources (pod logs):
         - PodLogRequest / follow semantics and error paths.
+        - Require complete pod identity metadata; no silent defaults for missing fields.
         - Compatibility with kube client streaming APIs.
 
     - path: "src/cli/**"
@@ -76,6 +80,12 @@ reviews:
         Run configuration assembly:
         - Ensure resolved config matches CLI inputs and discovery expectations.
 
+    - path: ".github/copilot-instructions.md"
+      instructions: |
+        Review guidance doc:
+        - Keep rules general; avoid encoding one-off implementation recipes.
+        - Update Review themes when the same feedback recurs across PRs.
+
     - path: "**/*.rs"
       instructions: |
         General Rust (rustern):
@@ -84,6 +94,7 @@ reviews:
         - Do not duplicate rustfmt/style feedback covered by CI.
         - Source code comments must be in English; review comments should stay Japanese (language: ja-JP).
         - No drive-by refactors unrelated to the PR.
+        - Unordered test assertions should use set semantics, not slice order.
 
     - path: ".github/workflows/**"
       instructions: |
