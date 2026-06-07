@@ -32,7 +32,7 @@ struct AttachPodLogParams {
 async fn source_meta_for_key(ctx: &PodWatchCtx, key: &SourceKey) -> SourceMeta {
     let snap = lookup_pod_meta(ctx, key).await;
     SourceMeta {
-        context: ctx.context_name.clone(),
+        context: ctx.admission.context_name.clone(),
         namespace: key.namespace.clone(),
         pod: key.pod.clone(),
         container: key.container.clone(),
@@ -115,34 +115,34 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
     let mut reopen_start_failures = 0u32;
 
     loop {
-        if p.pod_token.is_cancelled() || p.ctx.root_child.is_cancelled() {
+        if p.pod_token.is_cancelled() || p.ctx.attach.root_child.is_cancelled() {
             return;
         }
 
         let request = {
-            let last_timestamp = p.ctx.reconnect_cursor.get(&p.key).await;
-            pod_log_request_for_reopen(&p.ctx.pod_log, last_timestamp, reopen)
+            let last_timestamp = p.ctx.attach.reconnect_cursor.get(&p.key).await;
+            pod_log_request_for_reopen(&p.ctx.attach.pod_log, last_timestamp, reopen)
         };
 
-        let permit = if p.ctx.pod_log.follow {
-            match Arc::clone(&p.ctx.sem).try_acquire_owned() {
+        let permit = if p.ctx.attach.pod_log.follow {
+            match Arc::clone(&p.ctx.attach.sem).try_acquire_owned() {
                 Ok(permit) => permit,
                 Err(_) => {
-                    if let Some(tx) = &p.ctx.follow_limit_notifier {
+                    if let Some(tx) = &p.ctx.attach.follow_limit_notifier {
                         let _ = tx.try_send(());
                     }
-                    p.ctx.root_child.cancel();
+                    p.ctx.attach.root_child.cancel();
                     return;
                 }
             }
         } else {
-            match Arc::clone(&p.ctx.sem).acquire_owned().await {
+            match Arc::clone(&p.ctx.attach.sem).acquire_owned().await {
                 Ok(permit) => permit,
                 Err(_) => return,
             }
         };
 
-        let client = p.ctx.client.clone();
+        let client = p.ctx.attach.client.clone();
         match PodLogSource::start(client, p.meta.clone(), p.pod_token.clone(), request).await {
             Ok(src) => {
                 reopen_start_failures = 0;
@@ -151,10 +151,11 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
                     Box::new(src).into_stream(),
                     p.key.clone(),
                     p.pod_token.clone(),
-                    p.ctx.reconnect_cursor.clone(),
+                    p.ctx.attach.reconnect_cursor.clone(),
                     done_tx,
                 ));
                 if p.ctx
+                    .attach
                     .mux_tx
                     .send(MuxCmd::Add(p.key.clone(), Box::pin(stream)))
                     .await
@@ -165,7 +166,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
                 }
                 drop(permit);
 
-                let should_reconnect = p.ctx.cursor_reconnect && p.ctx.pod_log.follow;
+                let should_reconnect = p.ctx.attach.cursor_reconnect && p.ctx.attach.pod_log.follow;
                 match done_rx.await {
                     Ok(StreamEnd::Eof) if should_reconnect => {
                         reopen = true;
@@ -178,10 +179,10 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
                 tracing::warn!(?e, "pod log start");
                 drop(permit);
                 if reopen
-                    && p.ctx.cursor_reconnect
-                    && p.ctx.pod_log.follow
+                    && p.ctx.attach.cursor_reconnect
+                    && p.ctx.attach.pod_log.follow
                     && !p.pod_token.is_cancelled()
-                    && !p.ctx.root_child.is_cancelled()
+                    && !p.ctx.attach.root_child.is_cancelled()
                     && reopen_start_failures < MAX_REOPEN_START_RETRIES
                 {
                     reopen_start_failures += 1;
@@ -225,15 +226,16 @@ mod tests {
 
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
-    use crate::runtime::cursor_store::ReconnectCursorStore;
-    use crate::runtime::pod_meta_cache::{new_pod_meta_cache, update_pod_meta_cache};
+    use crate::runtime::pod_meta_cache::update_pod_meta_cache;
+    use crate::runtime::test_support::TestOrchestratorBuilder;
+    use crate::runtime::watch_ctx::{AttachDeps, PodWatchCtx, WatchAdmission};
     use crate::source::ContextName;
     use crate::source::pod_log::PodLogRequest;
 
     use futures::StreamExt;
     use http::{Request, Response, StatusCode};
     use kube::Client;
-    use tokio::sync::{Semaphore, mpsc};
+    use tokio::sync::mpsc;
 
     use crate::discovery::pod_watcher::{
         ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
@@ -251,10 +253,6 @@ mod tests {
 
     #[tokio::test]
     async fn source_meta_for_key_uses_cached_pod_labels_and_node() {
-        let cache = new_pod_meta_cache();
-        let (mux_tx, _) = mpsc::channel(1);
-        let (mock, _handle) =
-            tower_test::mock::pair::<Request<kube::client::Body>, Response<kube::client::Body>>();
         let mut labels = BTreeMap::new();
         labels.insert("app".into(), "api".into());
         let pod = k8s_openapi::api::core::v1::Pod {
@@ -271,28 +269,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let ctx = PodWatchCtx {
-            context_name: ContextName("ctx".into()),
-            pod_regex: None,
-            pod_condition: None,
-            container_discovery: ContainerDiscoverOpts::default(),
-            container_incl: regex::Regex::new(".*").unwrap(),
-            container_excl: vec![],
-            allowed_ns: None,
-            exclude_pod: vec![],
-            mux_tx,
-            client: Client::new(mock, "default"),
-            root_child: CancellationToken::new(),
-            pod_log: PodLogRequest::default(),
-            cursor_reconnect: false,
-            reconnect_cursor: ReconnectCursorStore::new(),
-            sem: Arc::new(Semaphore::new(1)),
-            follow_limit_notifier: None,
-            pod_meta: cache,
-        };
-        update_pod_meta_cache(&ctx, &pod).await;
+        let fixture = TestOrchestratorBuilder::new().build();
+        update_pod_meta_cache(&fixture, &pod).await;
 
-        let meta = source_meta_for_key(&ctx, &sample_key()).await;
+        let meta = source_meta_for_key(&fixture, &sample_key()).await;
         assert_eq!(meta.node.as_deref(), Some("worker-1"));
         assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
     }
@@ -305,35 +285,33 @@ mod tests {
         let (mux_tx, mut mux_rx) = mpsc::channel(8);
         let pod_token = CancellationToken::new();
 
-        let ctx = Arc::new(PodWatchCtx {
-            context_name: ContextName("ctx".into()),
-            pod_regex: None,
-            pod_condition: None,
-            container_discovery: ContainerDiscoverOpts {
-                include_init_containers: true,
-                include_ephemeral_containers: true,
-                state_policy: ContainerStatePolicy::Subset(
-                    [ContainerLifecycleBucket::Running].into_iter().collect(),
-                ),
-            },
-            container_incl: regex::Regex::new(".*").unwrap(),
-            container_excl: Vec::new(),
-            allowed_ns: None,
-            exclude_pod: Vec::new(),
-            mux_tx,
-            client,
-            root_child: CancellationToken::new(),
-            pod_log: PodLogRequest {
+        let base_fixture = TestOrchestratorBuilder::new()
+            .mux_tx(mux_tx)
+            .pod_log(PodLogRequest {
                 follow: true,
                 tail: Some(25),
                 since_seconds: Some(300),
                 ..Default::default()
+            })
+            .cursor_reconnect(true)
+            .sem_permits(8)
+            .build();
+        let base = &*base_fixture;
+        let ctx = Arc::new(PodWatchCtx {
+            admission: WatchAdmission {
+                container_discovery: ContainerDiscoverOpts {
+                    include_init_containers: true,
+                    include_ephemeral_containers: true,
+                    state_policy: ContainerStatePolicy::Subset(
+                        [ContainerLifecycleBucket::Running].into_iter().collect(),
+                    ),
+                },
+                ..base.admission.clone()
             },
-            sem: Arc::new(Semaphore::new(8)),
-            follow_limit_notifier: None,
-            cursor_reconnect: true,
-            reconnect_cursor: ReconnectCursorStore::new(),
-            pod_meta: new_pod_meta_cache(),
+            attach: AttachDeps {
+                client,
+                ..base.attach.clone()
+            },
         });
 
         let (second_req_tx, second_req_rx) = oneshot::channel();

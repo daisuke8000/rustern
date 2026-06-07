@@ -19,6 +19,8 @@ mod pipeline;
 mod pod_meta_cache;
 mod registry;
 mod run;
+#[cfg(test)]
+mod test_support;
 mod watch;
 mod watch_ctx;
 

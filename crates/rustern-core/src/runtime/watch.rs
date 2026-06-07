@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::{Stream, StreamExt};
@@ -14,55 +13,7 @@ use super::pod_meta_cache::{
 };
 use super::registry::PodStreamRegistry;
 use super::watch_ctx::PodWatchCtx;
-use crate::discovery::pod_condition::pod_matches_condition;
-use crate::discovery::pod_watcher::keys_from_pod;
-use crate::source::SourceKey;
 use crate::source::pod_meta::PodLocator;
-
-fn filtered_stream_keys(pod: &Pod, ctx: &PodWatchCtx) -> Vec<SourceKey> {
-    keys_from_pod(pod, &ctx.context_name, &ctx.container_discovery)
-        .into_iter()
-        .filter(|k| ctx.container_incl.is_match(&k.container))
-        .filter(|k| !ctx.container_excl.iter().any(|r| r.is_match(&k.container)))
-        .collect()
-}
-
-fn pod_passes_watch_filters(pod: &Pod, ctx: &PodWatchCtx) -> bool {
-    let name = pod.metadata.name.as_deref().unwrap_or("");
-    if let Some(allowed) = &ctx.allowed_ns {
-        let ns = pod.metadata.namespace.as_deref().unwrap_or("");
-        if !allowed.contains(ns) {
-            return false;
-        }
-    }
-    if ctx.exclude_pod.iter().any(|re| re.is_match(name)) {
-        return false;
-    }
-    if let Some(re) = &ctx.pod_regex
-        && !re.is_match(name)
-    {
-        return false;
-    }
-    if let Some(cond) = &ctx.pod_condition
-        && !pod_matches_condition(pod, cond)
-    {
-        return false;
-    }
-    true
-}
-
-fn collect_keys_snapshot(pending_pods: Vec<Pod>, ctx: &PodWatchCtx) -> HashSet<SourceKey> {
-    let mut snap: HashSet<SourceKey> = HashSet::new();
-    for pod in pending_pods {
-        if !pod_passes_watch_filters(&pod, ctx) {
-            continue;
-        }
-        for k in filtered_stream_keys(&pod, ctx) {
-            snap.insert(k);
-        }
-    }
-    snap
-}
 
 pub(crate) fn spawn_watch_task<S>(
     w: S,
@@ -94,17 +45,18 @@ where
                                 .await;
                         }
                         Event::Apply(pod) => {
-                            if !pod_passes_watch_filters(&pod, watch_ctx.as_ref()) {
+                            if !watch_ctx.admission.admit_pod(&pod) {
                                 remove_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
                                 registry
                                     .remove_pod(&pod, watch_ctx.as_ref(), &mux_tx_w)
                                     .await;
                             } else {
                                 update_pod_meta_cache(watch_ctx.as_ref(), &pod).await;
-                                let desired: HashSet<SourceKey> =
-                                    filtered_stream_keys(&pod, watch_ctx.as_ref())
-                                        .into_iter()
-                                        .collect();
+                                let desired = watch_ctx
+                                    .admission
+                                    .admit_streams(&pod)
+                                    .into_iter()
+                                    .collect();
                                 registry
                                     .reconcile_pod(&pod, desired, &watch_ctx)
                                     .await;
@@ -119,11 +71,10 @@ where
                             pending_pods.push(pod);
                         }
                         Event::InitDone => {
-                            let snap = collect_keys_snapshot(
-                                std::mem::take(&mut pending_pods),
-                                watch_ctx.as_ref(),
-                            );
-                            let keep: HashSet<PodLocator> = snap
+                            let snap = watch_ctx.admission.collect_snapshot(std::mem::take(
+                                &mut pending_pods,
+                            ));
+                            let keep = snap
                                 .iter()
                                 .map(PodLocator::from_source_key)
                                 .collect();
@@ -140,19 +91,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::discovery::pod_watcher::{
-        ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
-    };
-    use crate::runtime::cursor_store::ReconnectCursorStore;
-    use crate::runtime::pod_meta_cache;
-    use crate::source::ContextName;
+    use crate::runtime::test_support::TestOrchestratorBuilder;
     use k8s_openapi::api::core::v1::{
         Container, ContainerState, ContainerStateRunning, ContainerStatus, Pod, PodSpec, PodStatus,
     };
     use kube::api::ObjectMeta;
-    use regex::Regex;
-    use std::collections::HashSet as StdHashSet;
+    use std::collections::HashSet;
 
     fn test_pod(containers: &[&str]) -> Pod {
         Pod {
@@ -193,66 +137,33 @@ mod tests {
         }
     }
 
-    fn test_ctx(container_incl: &str, container_excl: &[&str]) -> PodWatchCtx {
-        PodWatchCtx {
-            context_name: ContextName("ctx".into()),
-            pod_regex: None,
-            pod_condition: None,
-            container_discovery: ContainerDiscoverOpts {
-                include_init_containers: false,
-                include_ephemeral_containers: false,
-                state_policy: ContainerStatePolicy::Subset(StdHashSet::from([
-                    ContainerLifecycleBucket::Running,
-                ])),
-            },
-            container_incl: Regex::new(container_incl).unwrap(),
-            container_excl: container_excl
-                .iter()
-                .map(|p| Regex::new(p).unwrap())
-                .collect(),
-            allowed_ns: None,
-            exclude_pod: vec![],
-            mux_tx: mpsc::channel(1).0,
-            client: {
-                let (mock, _handle) = tower_test::mock::pair::<
-                    http::Request<kube::client::Body>,
-                    http::Response<kube::client::Body>,
-                >();
-                kube::Client::new(mock, "default")
-            },
-            root_child: CancellationToken::new(),
-            pod_log: crate::source::pod_log::PodLogRequest::default(),
-            cursor_reconnect: false,
-            reconnect_cursor: ReconnectCursorStore::new(),
-            sem: Arc::new(tokio::sync::Semaphore::new(1)),
-            follow_limit_notifier: None,
-            pod_meta: pod_meta_cache::new_pod_meta_cache(),
-        }
-    }
-
     #[tokio::test]
-    async fn filtered_stream_keys_includes_matching_containers() {
+    async fn admit_streams_includes_matching_containers() {
         let pod = test_pod(&["app", "sidecar", "istio-proxy"]);
-        let ctx = test_ctx("app|sidecar", &[]);
-        let keys = filtered_stream_keys(&pod, &ctx);
-        let names: Vec<_> = keys.iter().map(|k| k.container.as_str()).collect();
-        assert_eq!(names, vec!["app", "sidecar"]);
-    }
-
-    #[tokio::test]
-    async fn filtered_stream_keys_excludes_matching_containers() {
-        let pod = test_pod(&["app", "sidecar", "istio-proxy"]);
-        let ctx = test_ctx(".*", &["istio-proxy"]);
-        let keys = filtered_stream_keys(&pod, &ctx);
+        let fixture = TestOrchestratorBuilder::new()
+            .container_incl("app|sidecar")
+            .build();
+        let keys = fixture.admission.admit_streams(&pod);
         let names: HashSet<_> = keys.iter().map(|k| k.container.as_str()).collect();
         assert_eq!(names, HashSet::from(["app", "sidecar"]));
     }
 
     #[tokio::test]
-    async fn collect_keys_snapshot_applies_container_filters() {
+    async fn admit_streams_excludes_matching_containers() {
+        let pod = test_pod(&["app", "sidecar", "istio-proxy"]);
+        let fixture = TestOrchestratorBuilder::new()
+            .container_excl(&["istio-proxy"])
+            .build();
+        let keys = fixture.admission.admit_streams(&pod);
+        let names: HashSet<_> = keys.iter().map(|k| k.container.as_str()).collect();
+        assert_eq!(names, HashSet::from(["app", "sidecar"]));
+    }
+
+    #[tokio::test]
+    async fn collect_snapshot_applies_container_filters() {
         let pod = test_pod(&["app", "istio-proxy"]);
-        let ctx = test_ctx("app", &[]);
-        let snap = collect_keys_snapshot(vec![pod], &ctx);
+        let fixture = TestOrchestratorBuilder::new().container_incl("app").build();
+        let snap = fixture.admission.collect_snapshot(vec![pod]);
         assert_eq!(snap.len(), 1);
         assert_eq!(snap.iter().next().unwrap().container, "app");
     }
