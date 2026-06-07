@@ -1,5 +1,11 @@
 # rustern
-Kubernetes multi pod and container log tailing in Rust inspired by the original stern
+
+Kubernetes multi-pod and multi-container log tailer in Rust, inspired by [stern](https://github.com/stern/stern).
+
+**rustern** (`rstn`) tails logs from many pods and containers at once. It targets **stern/kubectl parity** for day-to-day tailing, plus a small set of **rustern-plus** features (exit-on, stats, cursor reconnect). You need a working kubeconfig and permission to list/watch pods and read logs in the target cluster.
+
+- **Users**: install, quick start, and feature notes below.
+- **Contributors**: architecture, pipeline order, tests, and perf harness → [`crates/rustern-core/README.md`](crates/rustern-core/README.md).
 
 ## Install
 
@@ -21,6 +27,42 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 Uninstall: `make uninstall`
 
+## Quick start
+
+Examples match `rstn --help`. Replace namespaces and workload names with your cluster.
+
+**Follow logs for a deployment** (resolves pod label selector from the workload):
+
+```bash
+rstn deploy/my-app -n my-namespace -f
+```
+
+**Follow by label selector** (positional query omitted → implicit `.*`):
+
+```bash
+rstn -l app=nginx -n default -f
+```
+
+**One-shot logs from the last hour** (no follow):
+
+```bash
+rstn my-pod -n default --since 1h --no-follow
+```
+
+**Regex across all namespaces**:
+
+```bash
+rstn 'api.*' -A -f
+```
+
+**Tail with timestamps** (RFC3339 nano, stern default):
+
+```bash
+rstn deploy/api -n production -f -t
+```
+
+Run `rstn --help` for the full flag list (containers, since/since-time, filters, output format, and more).
+
 ## Stern alignment (spec summary)
 
 Behavior is tracked against [stern](https://github.com/stern/stern); not every flag matches yet.
@@ -41,3 +83,24 @@ Behavior is tracked against [stern](https://github.com/stern/stern); not every f
 - **`--stats`**: emit one human-readable runtime summary line to **stderr** every `--stats-interval` (default `30s`) without polluting stdout. Reports active log streams, forwarded lines per window, and lossy dropped lines when `--lossy` is enabled.
 - **`--cursor-reconnect`**: opt-in reconnect for follow mode. rustern keeps the last seen timestamp per pod/container source in memory; if a stream disconnects, it re-opens with `sinceTime=<last_timestamp-1s overlap>` to avoid gaps at the seam. `--since` / `--since-time` / `--tail` only apply to the first open for a given pod UID, and the flag is ignored with `--no-follow`.
 
+## Development
+
+From the repo root:
+
+```bash
+cargo build --workspace --locked
+cargo test -p rustern-core
+```
+
+**CI** (pull requests to `main`, see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+
+| Job | Checks |
+|-----|--------|
+| `rust` | `cargo fmt --all --check`, `cargo build --workspace --locked`, `cargo test --workspace --locked` |
+| `audit` | `cargo audit` (RustSec advisory-db) |
+
+Internal design (runtime layers, mux/attach/watch, pipeline order, integration tests, criterion benches) lives in [`crates/rustern-core/README.md`](crates/rustern-core/README.md)—not duplicated here.
+
+## License
+
+[MIT](LICENSE)
