@@ -36,7 +36,7 @@ impl PodStreamRegistry {
         self.active
             .iter()
             .filter(|k| {
-                k.context == ctx.context_name
+                k.context == ctx.admission.context_name
                     && k.namespace == namespace
                     && k.pod == pod_name
                     && uid.is_none_or(|u| k.uid == u)
@@ -55,7 +55,7 @@ impl PodStreamRegistry {
             if let Some(t) = self.tokens.remove(&k) {
                 t.cancel();
             }
-            ctx.reconnect_cursor.remove(&k).await;
+            ctx.attach.reconnect_cursor.remove(&k).await;
             self.active.remove(&k);
             if mux_tx.send(MuxCmd::Remove(k)).await.is_err() {
                 tracing::debug!("mux channel closed, skipping remove");
@@ -65,7 +65,7 @@ impl PodStreamRegistry {
 
     fn add_key(&mut self, key: SourceKey, ctx: &Arc<PodWatchCtx>) {
         if self.active.insert(key.clone()) {
-            let pod_t = ctx.root_child.child_token();
+            let pod_t = ctx.attach.root_child.child_token();
             self.tokens.insert(key.clone(), pod_t.clone());
             spawn_attach_pod_log(ctx, key, pod_t);
         }
@@ -90,7 +90,7 @@ impl PodStreamRegistry {
         ctx: &Arc<PodWatchCtx>,
     ) {
         let diff = reconcile(&self.active, &snapshot);
-        self.drop_keys(diff.to_drop, ctx.as_ref(), &ctx.mux_tx)
+        self.drop_keys(diff.to_drop, ctx.as_ref(), &ctx.attach.mux_tx)
             .await;
         for key in diff.to_add {
             self.add_key(key, ctx);
@@ -110,7 +110,7 @@ impl PodStreamRegistry {
             .into_iter()
             .collect();
         let diff = reconcile(&current, &desired);
-        self.drop_keys(diff.to_drop, ctx.as_ref(), &ctx.mux_tx)
+        self.drop_keys(diff.to_drop, ctx.as_ref(), &ctx.attach.mux_tx)
             .await;
         for key in diff.to_add {
             self.add_key(key, ctx);
@@ -131,15 +131,11 @@ impl PodStreamRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::pod_watcher::{
-        ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
-    };
-    use crate::runtime::pod_meta_cache::new_pod_meta_cache;
+    use crate::runtime::test_support::{TestOrchestratorBuilder, TestOrchestratorFixture};
     use crate::source::ContextName;
     use k8s_openapi::api::core::v1::ContainerState;
     use k8s_openapi::api::core::v1::ContainerStateRunning;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use std::collections::HashSet as StdHashSet;
     use tokio::sync::mpsc;
 
     fn sample_key(container: &str, uid: &str) -> SourceKey {
@@ -191,44 +187,16 @@ mod tests {
         }
     }
 
-    fn test_ctx(mux_tx: mpsc::Sender<MuxCmd>) -> Arc<PodWatchCtx> {
-        Arc::new(PodWatchCtx {
-            context_name: ContextName("ctx".into()),
-            pod_regex: None,
-            pod_condition: None,
-            container_discovery: ContainerDiscoverOpts {
-                include_init_containers: false,
-                include_ephemeral_containers: false,
-                state_policy: ContainerStatePolicy::Subset(StdHashSet::from([
-                    ContainerLifecycleBucket::Running,
-                ])),
-            },
-            container_incl: regex::Regex::new(".*").unwrap(),
-            container_excl: vec![],
-            allowed_ns: None,
-            exclude_pod: vec![],
-            mux_tx,
-            client: {
-                let (mock, _handle) = tower_test::mock::pair::<
-                    http::Request<kube::client::Body>,
-                    http::Response<kube::client::Body>,
-                >();
-                kube::Client::new(mock, "default")
-            },
-            root_child: CancellationToken::new(),
-            pod_log: crate::source::pod_log::PodLogRequest::default(),
-            cursor_reconnect: false,
-            reconnect_cursor: crate::runtime::cursor_store::ReconnectCursorStore::new(),
-            sem: Arc::new(tokio::sync::Semaphore::new(1)),
-            follow_limit_notifier: None,
-            pod_meta: new_pod_meta_cache(),
-        })
+    fn test_ctx(mux_tx: mpsc::Sender<MuxCmd>) -> (TestOrchestratorFixture, Arc<PodWatchCtx>) {
+        let fixture = TestOrchestratorBuilder::new().mux_tx(mux_tx).build();
+        let ctx = fixture.arc();
+        (fixture, ctx)
     }
 
     #[tokio::test]
     async fn reconcile_pod_drops_removed_container_on_apply() {
         let (mux_tx, mut mux_rx) = mpsc::channel(8);
-        let ctx = test_ctx(mux_tx);
+        let (_fixture, ctx) = test_ctx(mux_tx);
         let mut reg = PodStreamRegistry::new();
 
         let uid = "uid-1";
@@ -240,13 +208,7 @@ mod tests {
             .insert(sample_key("c2", uid), CancellationToken::new());
 
         let pod = test_pod(uid, &["c2"]);
-        let desired: HashSet<SourceKey> = crate::discovery::pod_watcher::keys_from_pod(
-            &pod,
-            &ctx.context_name,
-            &ctx.container_discovery,
-        )
-        .into_iter()
-        .collect();
+        let desired: HashSet<SourceKey> = ctx.admission.admit_streams(&pod).into_iter().collect();
 
         reg.reconcile_pod(&pod, desired, &ctx).await;
 
@@ -260,7 +222,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_pod_drops_old_uid_on_rolling_update() {
         let (mux_tx, mut mux_rx) = mpsc::channel(8);
-        let ctx = test_ctx(mux_tx);
+        let (_fixture, ctx) = test_ctx(mux_tx);
         let mut reg = PodStreamRegistry::new();
 
         reg.active.insert(sample_key("c1", "uid-old"));
@@ -268,13 +230,7 @@ mod tests {
             .insert(sample_key("c1", "uid-old"), CancellationToken::new());
 
         let pod = test_pod("uid-new", &["c1"]);
-        let desired: HashSet<SourceKey> = crate::discovery::pod_watcher::keys_from_pod(
-            &pod,
-            &ctx.context_name,
-            &ctx.container_discovery,
-        )
-        .into_iter()
-        .collect();
+        let desired: HashSet<SourceKey> = ctx.admission.admit_streams(&pod).into_iter().collect();
 
         reg.reconcile_pod(&pod, desired, &ctx).await;
 

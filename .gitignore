@@ -23,3 +23,4 @@ target
 # Local agent / continual-learning (not shipped)
 AGENTS.md
 CONTEXT.md
+.cursor/hooks/state/

@@ -15,7 +15,7 @@ pub(crate) fn new_pod_meta_cache() -> Arc<RwLock<HashMap<PodLocator, PodMetaSnap
 }
 
 pub(crate) async fn update_pod_meta_cache(ctx: &PodWatchCtx, pod: &Pod) {
-    let Some(locator) = PodLocator::try_from_pod(&ctx.context_name, pod) else {
+    let Some(locator) = PodLocator::try_from_pod(&ctx.admission.context_name, pod) else {
         tracing::warn!(
             pod = ?pod.metadata.name,
             namespace = ?pod.metadata.namespace,
@@ -24,21 +24,21 @@ pub(crate) async fn update_pod_meta_cache(ctx: &PodWatchCtx, pod: &Pod) {
         return;
     };
     let snapshot = pod_meta_snapshot_from_pod(pod);
-    let mut cache = ctx.pod_meta.write().await;
+    let mut cache = ctx.attach.pod_meta.write().await;
     cache.insert(locator, snapshot);
 }
 
 pub(crate) async fn clear_pod_meta_cache(ctx: &PodWatchCtx) {
-    ctx.pod_meta.write().await.clear();
+    ctx.attach.pod_meta.write().await.clear();
 }
 
 pub(crate) async fn prune_pod_meta_cache(ctx: &PodWatchCtx, keep: &HashSet<PodLocator>) {
-    let mut cache = ctx.pod_meta.write().await;
+    let mut cache = ctx.attach.pod_meta.write().await;
     cache.retain(|loc, _| keep.contains(loc));
 }
 
 pub(crate) async fn remove_pod_meta_cache(ctx: &PodWatchCtx, pod: &Pod) {
-    let Some(locator) = PodLocator::try_from_pod(&ctx.context_name, pod) else {
+    let Some(locator) = PodLocator::try_from_pod(&ctx.admission.context_name, pod) else {
         tracing::warn!(
             pod = ?pod.metadata.name,
             namespace = ?pod.metadata.namespace,
@@ -46,13 +46,13 @@ pub(crate) async fn remove_pod_meta_cache(ctx: &PodWatchCtx, pod: &Pod) {
         );
         return;
     };
-    let mut cache = ctx.pod_meta.write().await;
+    let mut cache = ctx.attach.pod_meta.write().await;
     cache.remove(&locator);
 }
 
 pub(crate) async fn lookup_pod_meta(ctx: &PodWatchCtx, key: &SourceKey) -> PodMetaSnapshot {
     let locator = PodLocator::from_source_key(key);
-    let cache = ctx.pod_meta.read().await;
+    let cache = ctx.attach.pod_meta.read().await;
     if let Some(snapshot) = cache.get(&locator) {
         return snapshot.clone();
     }
@@ -65,16 +65,9 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use regex::Regex;
-    use tokio::sync::{Semaphore, mpsc};
-
-    use crate::discovery::pod_watcher::{
-        ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
-    };
-    use crate::source::pod_log::PodLogRequest;
+    use crate::runtime::test_support::{TestOrchestratorBuilder, TestOrchestratorFixture};
     use crate::source::{ContextName, SourceKey};
-    use tokio_util::sync::CancellationToken;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     fn test_pod() -> Pod {
         let mut labels = BTreeMap::new();
@@ -95,46 +88,20 @@ mod tests {
         }
     }
 
-    fn test_ctx(cache: Arc<RwLock<HashMap<PodLocator, PodMetaSnapshot>>>) -> PodWatchCtx {
-        PodWatchCtx {
-            context_name: ContextName("ctx".into()),
-            pod_regex: None,
-            pod_condition: None,
-            container_discovery: ContainerDiscoverOpts {
-                include_init_containers: false,
-                include_ephemeral_containers: false,
-                state_policy: ContainerStatePolicy::Subset(
-                    [ContainerLifecycleBucket::Running].into_iter().collect(),
-                ),
-            },
-            container_incl: Regex::new(".*").unwrap(),
-            container_excl: vec![],
-            allowed_ns: None,
-            exclude_pod: vec![],
-            mux_tx: mpsc::channel(1).0,
-            client: {
-                let (mock, _handle) = tower_test::mock::pair::<
-                    http::Request<kube::client::Body>,
-                    http::Response<kube::client::Body>,
-                >();
-                kube::Client::new(mock, "default")
-            },
-            root_child: CancellationToken::new(),
-            pod_log: PodLogRequest::default(),
-            cursor_reconnect: false,
-            reconnect_cursor: crate::runtime::cursor_store::ReconnectCursorStore::new(),
-            sem: Arc::new(Semaphore::new(1)),
-            follow_limit_notifier: None,
-            pod_meta: cache,
-        }
+    fn test_ctx(
+        cache: Arc<RwLock<HashMap<PodLocator, PodMetaSnapshot>>>,
+    ) -> TestOrchestratorFixture {
+        let mut fixture = TestOrchestratorBuilder::new().build();
+        fixture.ctx_mut().attach.pod_meta = cache;
+        fixture
     }
 
     #[tokio::test]
     async fn cache_lookup_returns_snapshot_after_update() {
         let cache = new_pod_meta_cache();
-        let ctx = test_ctx(cache);
+        let fixture = test_ctx(cache);
         let pod = test_pod();
-        update_pod_meta_cache(&ctx, &pod).await;
+        update_pod_meta_cache(&fixture, &pod).await;
 
         let key = SourceKey {
             context: ContextName("ctx".into()),
@@ -143,7 +110,7 @@ mod tests {
             container: "app".into(),
             uid: "uid-1".into(),
         };
-        let snap = lookup_pod_meta(&ctx, &key).await;
+        let snap = lookup_pod_meta(&fixture, &key).await;
         assert_eq!(snap.node.as_deref(), Some("worker-3"));
         assert_eq!(snap.labels.0.get("tier").map(String::as_str), Some("api"));
     }
@@ -151,7 +118,7 @@ mod tests {
     #[tokio::test]
     async fn cache_lookup_defaults_when_pod_unknown() {
         let cache = new_pod_meta_cache();
-        let ctx = test_ctx(cache);
+        let fixture = test_ctx(cache);
         let key = SourceKey {
             context: ContextName("ctx".into()),
             namespace: "ns".into(),
@@ -159,7 +126,7 @@ mod tests {
             container: "app".into(),
             uid: "uid-x".into(),
         };
-        let snap = lookup_pod_meta(&ctx, &key).await;
+        let snap = lookup_pod_meta(&fixture, &key).await;
         assert!(snap.node.is_none());
         assert!(snap.labels.0.is_empty());
     }
@@ -167,8 +134,8 @@ mod tests {
     #[tokio::test]
     async fn prune_pod_meta_cache_drops_stale_locators() {
         let cache = new_pod_meta_cache();
-        let ctx = test_ctx(cache);
-        update_pod_meta_cache(&ctx, &test_pod()).await;
+        let fixture = test_ctx(cache);
+        update_pod_meta_cache(&fixture, &test_pod()).await;
 
         let stale_pod = Pod {
             metadata: ObjectMeta {
@@ -179,13 +146,13 @@ mod tests {
             },
             ..Default::default()
         };
-        update_pod_meta_cache(&ctx, &stale_pod).await;
+        update_pod_meta_cache(&fixture, &stale_pod).await;
 
         let keep: HashSet<PodLocator> =
             HashSet::from([
                 PodLocator::try_from_pod(&ContextName("ctx".into()), &test_pod()).expect("locator"),
             ]);
-        prune_pod_meta_cache(&ctx, &keep).await;
+        prune_pod_meta_cache(&fixture, &keep).await;
 
         let active_key = SourceKey {
             context: ContextName("ctx".into()),
@@ -202,11 +169,11 @@ mod tests {
             uid: "uid-gone".into(),
         };
         assert_ne!(
-            lookup_pod_meta(&ctx, &active_key).await,
+            lookup_pod_meta(&fixture, &active_key).await,
             PodMetaSnapshot::default()
         );
         assert_eq!(
-            lookup_pod_meta(&ctx, &stale_key).await,
+            lookup_pod_meta(&fixture, &stale_key).await,
             PodMetaSnapshot::default()
         );
     }
@@ -214,10 +181,10 @@ mod tests {
     #[tokio::test]
     async fn remove_pod_meta_cache_drops_entry() {
         let cache = new_pod_meta_cache();
-        let ctx = test_ctx(cache);
+        let fixture = test_ctx(cache);
         let pod = test_pod();
-        update_pod_meta_cache(&ctx, &pod).await;
-        remove_pod_meta_cache(&ctx, &pod).await;
+        update_pod_meta_cache(&fixture, &pod).await;
+        remove_pod_meta_cache(&fixture, &pod).await;
 
         let key = SourceKey {
             context: ContextName("ctx".into()),
@@ -227,7 +194,7 @@ mod tests {
             uid: "uid-1".into(),
         };
         assert_eq!(
-            lookup_pod_meta(&ctx, &key).await,
+            lookup_pod_meta(&fixture, &key).await,
             PodMetaSnapshot::default()
         );
     }

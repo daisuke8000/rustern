@@ -20,7 +20,7 @@ use super::mux::{MuxCmd, spawn_mux_task};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use super::pod_meta_cache::new_pod_meta_cache;
 use super::watch::spawn_watch_task;
-use super::watch_ctx::PodWatchCtx;
+use super::watch_ctx::{AttachDeps, PodWatchCtx, WatchAdmission};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
 use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
 use crate::pipeline::ExitWatchState;
@@ -197,23 +197,27 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     );
 
     let watch_ctx = Arc::new(PodWatchCtx {
-        context_name,
-        pod_regex,
-        pod_condition: cfg.pod_condition.clone(),
-        container_discovery: cfg.container_discovery.clone(),
-        container_incl,
-        container_excl,
-        allowed_ns,
-        exclude_pod,
-        client,
-        root_child: cfg.root_token.clone(),
-        pod_log: cfg.pod_log.clone(),
-        cursor_reconnect: cfg.cursor_reconnect,
-        reconnect_cursor: ReconnectCursorStore::new(),
-        sem,
-        mux_tx: mux_tx.clone(),
-        follow_limit_notifier,
-        pod_meta: new_pod_meta_cache(),
+        admission: WatchAdmission {
+            context_name,
+            pod_regex,
+            pod_condition: cfg.pod_condition.clone(),
+            container_discovery: cfg.container_discovery.clone(),
+            container_incl,
+            container_excl,
+            allowed_ns,
+            exclude_pod,
+        },
+        attach: AttachDeps {
+            client,
+            root_child: cfg.root_token.clone(),
+            pod_log: cfg.pod_log.clone(),
+            cursor_reconnect: cfg.cursor_reconnect,
+            reconnect_cursor: ReconnectCursorStore::new(),
+            sem,
+            mux_tx: mux_tx.clone(),
+            follow_limit_notifier,
+            pod_meta: new_pod_meta_cache(),
+        },
     });
 
     let root_w = cfg.root_token.clone();
