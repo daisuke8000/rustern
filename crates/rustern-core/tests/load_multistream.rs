@@ -11,12 +11,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use http::{Request, Response, StatusCode};
-use rustern_core::pipeline::{ColorAssignOpts, ExitWatchState, FilterOn};
+use rustern_core::pipeline::ExitWatchState;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{LineFormatter, RenderCommand, flush_ticker};
 use rustern_core::runtime::{
-    LossyMetrics, MuxCmd, PipelineStages, RuntimeFwdConfig, apply_pipeline, forward_to_render,
-    spawn_mux_task,
+    LossyMetrics, MuxCmd, PipelineSpecBuilder, RuntimeFwdConfig, forward_to_render, spawn_mux_task,
 };
 use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{
@@ -103,24 +102,6 @@ fn log_body(pod: &str, lines: usize) -> String {
         );
     }
     body
-}
-
-fn default_pipeline_stages() -> PipelineStages {
-    PipelineStages {
-        includes: vec![],
-        excludes: vec![],
-        filter_on: FilterOn::Original,
-        jq: None,
-        level_key: None,
-        color_assign: ColorAssignOpts {
-            pod_colors: false,
-            container_colors: false,
-            diff_container: false,
-        },
-        exit_on: vec![],
-        exit_on_level: None,
-        exit_watch: ExitWatchState::new(CancellationToken::new()),
-    }
 }
 
 async fn connect_mock_sources(
@@ -270,7 +251,9 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
 
     let metrics = LossyMetrics::new(None);
     let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(render_buffer.max(1));
-    let pipe_stream = apply_pipeline(ReceiverStream::new(raw_rx), default_pipeline_stages());
+    let pipe_stream = PipelineSpecBuilder::new()
+        .build(ExitWatchState::new(token.clone()))
+        .apply(ReceiverStream::new(raw_rx));
     let fwd_cfg = RuntimeFwdConfig {
         buffer_size: render_buffer,
         lossy,

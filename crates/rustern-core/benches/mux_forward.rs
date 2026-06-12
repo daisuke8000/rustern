@@ -3,11 +3,10 @@ use std::sync::Arc;
 use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use futures::stream;
-use rustern_core::pipeline::{ColorAssignOpts, ExitWatchState, FilterOn};
+use rustern_core::pipeline::ExitWatchState;
 use rustern_core::render::RenderCommand;
 use rustern_core::runtime::{
-    LossyMetrics, MuxCmd, PipelineStages, RuntimeFwdConfig, apply_pipeline, forward_to_render,
-    spawn_mux_task,
+    LossyMetrics, MuxCmd, PipelineSpecBuilder, RuntimeFwdConfig, forward_to_render, spawn_mux_task,
 };
 use rustern_core::source::{ContextName, Labels, LogEvent, SourceKey, SourceKind, SourceMeta};
 use tokio::runtime::Runtime;
@@ -18,24 +17,6 @@ use tokio_util::sync::CancellationToken;
 const BATCH: u64 = 2_000;
 const RAW_BUFFER: usize = 4_096;
 const RENDER_BUFFER: usize = 4_096;
-
-fn default_pipeline_stages() -> PipelineStages {
-    PipelineStages {
-        includes: vec![],
-        excludes: vec![],
-        filter_on: FilterOn::Original,
-        jq: None,
-        level_key: None,
-        color_assign: ColorAssignOpts {
-            pod_colors: false,
-            container_colors: false,
-            diff_container: false,
-        },
-        exit_on: vec![],
-        exit_on_level: None,
-        exit_watch: ExitWatchState::new(CancellationToken::new()),
-    }
-}
 
 fn fwd_cfg(lossy: bool) -> RuntimeFwdConfig {
     RuntimeFwdConfig {
@@ -228,8 +209,9 @@ fn bench_mux_pipeline_forward(c: &mut Criterion) {
                     let (raw_tx, raw_rx) = mpsc::channel(RAW_BUFFER);
                     let (render_tx, render_rx) = mpsc::channel(RENDER_BUFFER);
                     let token = CancellationToken::new();
-                    let pipe_stream =
-                        apply_pipeline(ReceiverStream::new(raw_rx), default_pipeline_stages());
+                    let pipe_stream = PipelineSpecBuilder::new()
+                        .build(ExitWatchState::new(token.clone()))
+                        .apply(ReceiverStream::new(raw_rx));
                     let fwd_h = tokio::spawn(forward_to_render(
                         pipe_stream,
                         render_tx,
