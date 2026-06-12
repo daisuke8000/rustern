@@ -105,6 +105,9 @@ impl PipelineSpec {
     }
 
     /// Whether `--exit-on` or `--exit-on-level` fired during the last apply pass.
+    ///
+    /// `ExitWatchState` is shared (via `Clone`) with the stages consumed by `apply`;
+    /// call `spec.clone().apply(...)` so this spec can still read the shared flag afterward.
     pub fn triggered(&self) -> bool {
         self.stages.exit_watch.triggered()
     }
