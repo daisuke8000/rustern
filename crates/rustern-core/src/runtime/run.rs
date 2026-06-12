@@ -1,13 +1,11 @@
 //! Orchestrator: watch → mux → pipeline → stdout.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 use kube::runtime::watcher::watcher;
-use regex::Regex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
@@ -20,7 +18,8 @@ use super::mux::{MuxCmd, spawn_mux_task};
 use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use super::pod_meta_cache::PodMetaCache;
 use super::watch::spawn_watch_task;
-use super::watch_ctx::{AttachDeps, PodWatchCtx, WatchAdmission};
+use super::watch_admission::WatchAdmissionPolicy;
+use super::watch_ctx::{AttachDeps, PodWatchCtx};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
 use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
 use crate::pipeline::ExitWatchState;
@@ -86,12 +85,6 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let ctx_name = pick_context_name(&kube_cfg, &cfg.context)?;
     let context_name = ContextName(ctx_name.to_string());
 
-    let container_incl = Regex::new(&cfg.container)?;
-    let container_excl: Vec<Regex> = cfg
-        .exclude_container
-        .iter()
-        .map(|p| Regex::new(p))
-        .collect::<Result<_, _>>()?;
     let includes = compile_list(&cfg.include)?;
     let excludes = compile_list(&cfg.exclude)?;
 
@@ -100,27 +93,30 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         None => None,
     };
 
-    let exclude_pod: Vec<Regex> = cfg
-        .exclude_pod
-        .iter()
-        .map(|p| Regex::new(p))
-        .collect::<Result<_, _>>()
-        .map_err(|e| RunError::Other(format!("invalid exclude-pod regex: {e}")))?;
-
     let exit_on = compile_list(&cfg.exit_on)
         .map_err(|e| RunError::Other(format!("invalid --exit-on regex: {e}")))?;
     let exit_watch = ExitWatchState::new(cfg.root_token.clone());
 
-    let (api, allowed_ns): (Api<Pod>, Option<HashSet<String>>) = if cfg.all_namespaces {
-        (Api::all(client.clone()), None)
+    let api: Api<Pod> = if cfg.all_namespaces {
+        Api::all(client.clone())
     } else if cfg.namespaces.len() == 1 {
-        (Api::namespaced(client.clone(), &cfg.namespaces[0]), None)
+        Api::namespaced(client.clone(), &cfg.namespaces[0])
     } else {
-        (
-            Api::all(client.clone()),
-            Some(cfg.namespaces.iter().cloned().collect()),
-        )
+        Api::all(client.clone())
     };
+
+    let admission = WatchAdmissionPolicy::try_new(
+        context_name,
+        pod_regex,
+        &cfg.exclude_pod,
+        &cfg.namespaces,
+        cfg.all_namespaces,
+        &cfg.container,
+        &cfg.exclude_container,
+        cfg.container_discovery.clone(),
+        cfg.pod_condition.clone(),
+    )
+    .map_err(|e| RunError::Other(format!("invalid watch admission regex: {e}")))?;
 
     let w = watcher(api, watch_cfg);
     let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
@@ -198,16 +194,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     );
 
     let watch_ctx = Arc::new(PodWatchCtx {
-        admission: WatchAdmission {
-            context_name,
-            pod_regex,
-            pod_condition: cfg.pod_condition.clone(),
-            container_discovery: cfg.container_discovery.clone(),
-            container_incl,
-            container_excl,
-            allowed_ns,
-            exclude_pod,
-        },
+        admission,
         attach: AttachDeps {
             log_opener: Arc::new(PodLogSourceOpener::new(client)),
             root_child: cfg.root_token.clone(),

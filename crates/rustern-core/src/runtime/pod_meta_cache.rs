@@ -206,7 +206,7 @@ mod tests {
         fixture
             .attach
             .pod_meta
-            .update_from_pod(&fixture.admission.context_name, &pod)
+            .update_from_pod(&fixture.admission.context_name(), &pod)
             .await;
 
         let key = SourceKey {
