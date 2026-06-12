@@ -4,14 +4,14 @@ use std::collections::HashSet as StdHashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use regex::Regex;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::cursor_store::ReconnectCursorStore;
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
-use super::watch_ctx::{AttachDeps, PodWatchCtx, WatchAdmission};
+use super::watch_admission::WatchAdmissionPolicy;
+use super::watch_ctx::{AttachDeps, PodWatchCtx};
 use crate::discovery::pod_watcher::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
@@ -70,16 +70,6 @@ impl TestOrchestratorBuilder {
         }
     }
 
-    pub(crate) fn container_incl(mut self, pattern: &str) -> Self {
-        self.container_incl = pattern.into();
-        self
-    }
-
-    pub(crate) fn container_excl(mut self, patterns: &[&str]) -> Self {
-        self.container_excl = patterns.iter().map(|s| (*s).to_string()).collect();
-        self
-    }
-
     pub(crate) fn mux_tx(mut self, tx: mpsc::Sender<MuxCmd>) -> Self {
         self.mux_tx = Some(tx);
         self
@@ -114,26 +104,24 @@ impl TestOrchestratorBuilder {
             http::Response<kube::client::Body>,
         >();
         let ctx = PodWatchCtx {
-            admission: WatchAdmission {
-                context_name: self.context_name,
-                pod_regex: None,
-                pod_condition: None,
-                container_discovery: ContainerDiscoverOpts {
+            admission: WatchAdmissionPolicy::try_new(
+                self.context_name,
+                None,
+                &[],
+                &["ns".into()],
+                false,
+                &self.container_incl,
+                &self.container_excl,
+                ContainerDiscoverOpts {
                     include_init_containers: false,
                     include_ephemeral_containers: false,
                     state_policy: ContainerStatePolicy::Subset(StdHashSet::from([
                         ContainerLifecycleBucket::Running,
                     ])),
                 },
-                container_incl: Regex::new(&self.container_incl).expect("container_incl regex"),
-                container_excl: self
-                    .container_excl
-                    .iter()
-                    .map(|p| Regex::new(p).expect("container_excl regex"))
-                    .collect(),
-                allowed_ns: None,
-                exclude_pod: vec![],
-            },
+                None,
+            )
+            .expect("admission policy"),
             attach: AttachDeps {
                 mux_tx,
                 log_opener: Arc::new(PodLogSourceOpener::new(kube::Client::new(mock, "default"))),

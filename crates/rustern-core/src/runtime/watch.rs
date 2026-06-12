@@ -39,7 +39,7 @@ where
                             watch_ctx
                                 .attach
                                 .pod_meta
-                                .remove_pod(&watch_ctx.admission.context_name, &pod)
+                                .remove_pod(&watch_ctx.admission.context_name(), &pod)
                                 .await;
                             registry
                                 .remove_pod(&pod, watch_ctx.as_ref(), &mux_tx_w)
@@ -50,7 +50,7 @@ where
                                 watch_ctx
                                     .attach
                                     .pod_meta
-                                    .remove_pod(&watch_ctx.admission.context_name, &pod)
+                                    .remove_pod(&watch_ctx.admission.context_name(), &pod)
                                     .await;
                                 registry
                                     .remove_pod(&pod, watch_ctx.as_ref(), &mux_tx_w)
@@ -59,7 +59,7 @@ where
                                 watch_ctx
                                     .attach
                                     .pod_meta
-                                    .update_from_pod(&watch_ctx.admission.context_name, &pod)
+                                    .update_from_pod(&watch_ctx.admission.context_name(), &pod)
                                     .await;
                                 let desired = watch_ctx
                                     .admission
@@ -79,7 +79,7 @@ where
                             watch_ctx
                                 .attach
                                 .pod_meta
-                                .update_from_pod(&watch_ctx.admission.context_name, &pod)
+                                .update_from_pod(&watch_ctx.admission.context_name(), &pod)
                                 .await;
                             pending_pods.push(pod);
                         }
@@ -100,84 +100,4 @@ where
         }
         drop(mux_tx_w);
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::runtime::test_support::TestOrchestratorBuilder;
-    use k8s_openapi::api::core::v1::{
-        Container, ContainerState, ContainerStateRunning, ContainerStatus, Pod, PodSpec, PodStatus,
-    };
-    use kube::api::ObjectMeta;
-    use std::collections::HashSet;
-
-    fn test_pod(containers: &[&str]) -> Pod {
-        Pod {
-            metadata: ObjectMeta {
-                name: Some("p".into()),
-                namespace: Some("ns".into()),
-                uid: Some("uid-1".into()),
-                ..Default::default()
-            },
-            spec: Some(PodSpec {
-                containers: containers
-                    .iter()
-                    .map(|name| Container {
-                        name: name.to_string(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }),
-            status: Some(PodStatus {
-                container_statuses: Some(
-                    containers
-                        .iter()
-                        .map(|name| ContainerStatus {
-                            name: name.to_string(),
-                            ready: true,
-                            state: Some(ContainerState {
-                                running: Some(ContainerStateRunning::default()),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        })
-                        .collect(),
-                ),
-                phase: Some("Running".into()),
-                ..Default::default()
-            }),
-        }
-    }
-
-    #[tokio::test]
-    async fn admit_streams_includes_matching_containers() {
-        let pod = test_pod(&["app", "sidecar", "istio-proxy"]);
-        let fixture = TestOrchestratorBuilder::new()
-            .container_incl("app|sidecar")
-            .build();
-        let keys = fixture.admission.admit_streams(&pod);
-        let names: HashSet<_> = keys.iter().map(|k| k.container.as_str()).collect();
-        assert_eq!(names, HashSet::from(["app", "sidecar"]));
-    }
-
-    #[tokio::test]
-    async fn admit_streams_excludes_matching_containers() {
-        let pod = test_pod(&["app", "sidecar", "istio-proxy"]);
-        let fixture = TestOrchestratorBuilder::new()
-            .container_excl(&["istio-proxy"])
-            .build();
-        let keys = fixture.admission.admit_streams(&pod);
-        let names: HashSet<_> = keys.iter().map(|k| k.container.as_str()).collect();
-        assert_eq!(names, HashSet::from(["app", "sidecar"]));
-    }
-
-    #[tokio::test]
-    async fn collect_snapshot_applies_container_filters() {
-        let pod = test_pod(&["app", "istio-proxy"]);
-        let fixture = TestOrchestratorBuilder::new().container_incl("app").build();
-        let snap = fixture.admission.collect_snapshot(vec![pod]);
-        assert_eq!(snap.len(), 1);
-        assert_eq!(snap.iter().next().unwrap().container, "app");
-    }
 }

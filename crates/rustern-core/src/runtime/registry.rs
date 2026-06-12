@@ -36,7 +36,7 @@ impl PodStreamRegistry {
         self.active
             .iter()
             .filter(|k| {
-                k.context == ctx.admission.context_name
+                k.context == *ctx.admission.context_name()
                     && k.namespace == namespace
                     && k.pod == pod_name
                     && uid.is_none_or(|u| k.uid == u)

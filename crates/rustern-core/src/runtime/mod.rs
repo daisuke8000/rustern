@@ -22,6 +22,7 @@ mod run;
 #[cfg(test)]
 mod test_support;
 mod watch;
+mod watch_admission;
 mod watch_ctx;
 
 pub use config::{

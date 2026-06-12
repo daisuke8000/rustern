@@ -216,7 +216,7 @@ pub(crate) fn spawn_attach_pod_log(
     let ctx = Arc::clone(ctx);
     tokio::spawn(async move {
         let meta =
-            source_meta_for_key(&ctx.admission.context_name, &ctx.attach.pod_meta, &key).await;
+            source_meta_for_key(&ctx.admission.context_name(), &ctx.attach.pod_meta, &key).await;
         attach_pod_log_stream(AttachPodLogParams {
             ctx,
             meta,
@@ -235,7 +235,7 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     use crate::runtime::test_support::TestOrchestratorBuilder;
-    use crate::runtime::watch_ctx::{AttachDeps, PodWatchCtx, WatchAdmission};
+    use crate::runtime::watch_ctx::{AttachDeps, PodWatchCtx};
     use crate::source::ContextName;
     use crate::source::pod_log::PodLogRequest;
 
@@ -243,10 +243,6 @@ mod tests {
     use http::{Request, Response, StatusCode};
     use kube::Client;
     use tokio::sync::mpsc;
-
-    use crate::discovery::pod_watcher::{
-        ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
-    };
 
     fn sample_key() -> SourceKey {
         SourceKey {
@@ -300,11 +296,11 @@ mod tests {
         fixture
             .attach
             .pod_meta
-            .update_from_pod(&fixture.admission.context_name, &pod)
+            .update_from_pod(&fixture.admission.context_name(), &pod)
             .await;
 
         let meta = source_meta_for_key(
-            &fixture.admission.context_name,
+            &fixture.admission.context_name(),
             &fixture.attach.pod_meta,
             &sample_key(),
         )
@@ -334,16 +330,7 @@ mod tests {
             .build();
         let base = &*base_fixture;
         let ctx = Arc::new(PodWatchCtx {
-            admission: WatchAdmission {
-                container_discovery: ContainerDiscoverOpts {
-                    include_init_containers: true,
-                    include_ephemeral_containers: true,
-                    state_policy: ContainerStatePolicy::Subset(
-                        [ContainerLifecycleBucket::Running].into_iter().collect(),
-                    ),
-                },
-                ..base.admission.clone()
-            },
+            admission: base.admission.clone(),
             attach: AttachDeps {
                 log_opener: Arc::new(crate::source::log_opener::PodLogSourceOpener::new(client)),
                 ..base.attach.clone()
