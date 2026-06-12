@@ -1,8 +1,7 @@
-//! Formatter and pipeline color setup for `run`.
+//! Formatter setup for `run`.
 
 use std::sync::Arc;
 
-use crate::pipeline::ColorAssignOpts;
 use crate::runtime::FormatterChoice;
 
 use super::LineFormatter;
@@ -16,29 +15,6 @@ use super::raw_renderer::RawLineFormatter;
 pub enum RenderSetupError {
     #[error("invalid highlight/include regex: {0}")]
     HighlightRegex(#[from] regex::Error),
-}
-
-pub(crate) fn color_assign_opts(
-    formatter: &FormatterChoice,
-    diff_container: bool,
-) -> ColorAssignOpts {
-    let FormatterChoice::Default {
-        pod_colors,
-        container_colors,
-        ..
-    } = formatter
-    else {
-        return ColorAssignOpts {
-            pod_colors: false,
-            container_colors: false,
-            diff_container: false,
-        };
-    };
-    ColorAssignOpts {
-        pod_colors: *pod_colors,
-        container_colors: *container_colors,
-        diff_container,
-    }
 }
 
 pub(crate) fn line_formatter(choice: &FormatterChoice) -> Arc<dyn LineFormatter> {

@@ -10,21 +10,19 @@ use crate::pipeline::{
 };
 use crate::source::{LogEvent, LogSourceError};
 
-pub(super) fn compile_list(p: &[String]) -> Result<Vec<Regex>, regex::Error> {
-    p.iter().map(|s| Regex::new(s)).collect()
-}
-
+// Hidden migration surface — prefer `spec::PipelineSpec`.
 #[doc(hidden)]
+#[derive(Clone)]
 pub struct PipelineStages {
-    pub includes: Vec<Regex>,
-    pub excludes: Vec<Regex>,
-    pub filter_on: FilterOn,
-    pub jq: Option<(CompiledFilter, QueryMode)>,
-    pub level_key: Option<String>,
-    pub color_assign: ColorAssignOpts,
-    pub exit_on: Vec<Regex>,
-    pub exit_on_level: Option<ExitOnLevel>,
-    pub exit_watch: ExitWatchState,
+    pub(crate) includes: Vec<Regex>,
+    pub(crate) excludes: Vec<Regex>,
+    pub(crate) filter_on: FilterOn,
+    pub(crate) jq: Option<(CompiledFilter, QueryMode)>,
+    pub(crate) level_key: Option<String>,
+    pub(crate) color_assign: ColorAssignOpts,
+    pub(crate) exit_on: Vec<Regex>,
+    pub(crate) exit_on_level: Option<ExitOnLevel>,
+    pub(crate) exit_watch: ExitWatchState,
 }
 
 #[doc(hidden)]
@@ -91,7 +89,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::color_assign::ColorAssignOpts;
+    use crate::pipeline::ExitOnLevel;
+    use crate::runtime::{PipelineSpec, PipelineSpecBuilder};
     use crate::source::{ContextName, Labels, SourceKind, SourceMeta};
     use chrono::Utc;
     use futures::StreamExt;
@@ -119,30 +118,19 @@ mod tests {
         }
     }
 
-    fn base_stages(token: CancellationToken) -> PipelineStages {
-        PipelineStages {
-            includes: vec![Regex::new("visible").unwrap()],
-            excludes: vec![],
-            filter_on: FilterOn::Original,
-            jq: None,
-            level_key: None,
-            color_assign: ColorAssignOpts {
-                pod_colors: false,
-                container_colors: false,
-                diff_container: false,
-            },
-            exit_on: vec![Regex::new("secret").unwrap()],
-            exit_on_level: None,
-            exit_watch: ExitWatchState::new(token),
-        }
+    fn base_spec(token: CancellationToken) -> PipelineSpec {
+        PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("visible").unwrap()])
+            .with_exit_on(vec![Regex::new("secret").unwrap()])
+            .build(ExitWatchState::new(token))
     }
 
     #[tokio::test]
     async fn exit_on_fires_before_include_filter() {
         let token = CancellationToken::new();
-        let stages = base_stages(token.clone());
+        let spec = base_spec(token.clone());
         let s = futures::stream::iter(vec![Ok(ev("secret hidden line"))]);
-        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        let out: Vec<_> = spec.apply(s).collect().await;
         assert!(out.is_empty(), "include filter hides the line from output");
         assert!(
             token.is_cancelled(),
@@ -157,23 +145,13 @@ mod tests {
         let mut event = ev(raw);
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
-        let stages = PipelineStages {
-            includes: vec![Regex::new("visible").unwrap()],
-            excludes: vec![],
-            filter_on: FilterOn::Original,
-            jq: None,
-            level_key: Some("level".into()),
-            color_assign: ColorAssignOpts {
-                pod_colors: false,
-                container_colors: false,
-                diff_container: false,
-            },
-            exit_on: vec![],
-            exit_on_level: Some(ExitOnLevel::Warn),
-            exit_watch: ExitWatchState::new(token.clone()),
-        };
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("visible").unwrap()])
+            .with_level_key(Some("level".into()))
+            .with_exit_on_level(Some(ExitOnLevel::Warn))
+            .build(ExitWatchState::new(token.clone()));
         let s = futures::stream::iter(vec![Ok(event)]);
-        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        let out: Vec<_> = spec.apply(s).collect().await;
         assert!(out.is_empty(), "include filter hides the line from output");
         assert!(
             token.is_cancelled(),
@@ -189,23 +167,12 @@ mod tests {
         let mut event = ev(raw);
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
-        let stages = PipelineStages {
-            includes: vec![],
-            excludes: vec![],
-            filter_on: FilterOn::Original,
-            jq: None,
-            level_key: Some("level".into()),
-            color_assign: ColorAssignOpts {
-                pod_colors: false,
-                container_colors: false,
-                diff_container: false,
-            },
-            exit_on: vec![],
-            exit_on_level: Some(ExitOnLevel::Warn),
-            exit_watch: ExitWatchState::new(token.clone()),
-        };
+        let spec = PipelineSpecBuilder::new()
+            .with_level_key(Some("level".into()))
+            .with_exit_on_level(Some(ExitOnLevel::Warn))
+            .build(ExitWatchState::new(token.clone()));
         let s = futures::stream::iter(vec![Ok(event)]);
-        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        let out: Vec<_> = spec.apply(s).collect().await;
         assert_eq!(out.len(), 1);
         assert!(matches!(
             out[0].as_ref().unwrap().level,
@@ -221,26 +188,17 @@ mod tests {
         let mut event = ev(raw);
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
-        let stages = PipelineStages {
-            includes: vec![Regex::new("^\\{").unwrap()],
-            excludes: vec![],
-            filter_on: FilterOn::Original,
-            jq: Some((
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("^\\{").unwrap()])
+            .with_jq(Some((
                 crate::pipeline::validate_filter(".msg").unwrap(),
                 QueryMode::Replace,
-            )),
-            level_key: Some("level".into()),
-            color_assign: ColorAssignOpts {
-                pod_colors: false,
-                container_colors: false,
-                diff_container: false,
-            },
-            exit_on: vec![],
-            exit_on_level: Some(ExitOnLevel::Warn),
-            exit_watch: ExitWatchState::new(token.clone()),
-        };
+            )))
+            .with_level_key(Some("level".into()))
+            .with_exit_on_level(Some(ExitOnLevel::Warn))
+            .build(ExitWatchState::new(token.clone()));
         let s = futures::stream::iter(vec![Ok(event)]);
-        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        let out: Vec<_> = spec.apply(s).collect().await;
         assert_eq!(
             out.len(),
             1,
@@ -256,26 +214,17 @@ mod tests {
         let mut event = ev(raw);
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
-        let stages = PipelineStages {
-            includes: vec![Regex::new("visible").unwrap()],
-            excludes: vec![],
-            filter_on: FilterOn::Transformed,
-            jq: Some((
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("visible").unwrap()])
+            .with_filter_on(FilterOn::Transformed)
+            .with_jq(Some((
                 crate::pipeline::validate_filter(".msg").unwrap(),
                 QueryMode::Replace,
-            )),
-            level_key: None,
-            color_assign: ColorAssignOpts {
-                pod_colors: false,
-                container_colors: false,
-                diff_container: false,
-            },
-            exit_on: vec![Regex::new("secret").unwrap()],
-            exit_on_level: None,
-            exit_watch: ExitWatchState::new(token.clone()),
-        };
+            )))
+            .with_exit_on(vec![Regex::new("secret").unwrap()])
+            .build(ExitWatchState::new(token.clone()));
         let s = futures::stream::iter(vec![Ok(event)]);
-        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        let out: Vec<_> = spec.apply(s).collect().await;
         assert!(out.is_empty(), "include filter hides transformed line");
         assert!(
             token.is_cancelled(),
@@ -290,26 +239,16 @@ mod tests {
         let mut event = ev(raw);
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
-        let stages = PipelineStages {
-            includes: vec![Regex::new("\"visible").unwrap()],
-            excludes: vec![],
-            filter_on: FilterOn::Transformed,
-            jq: Some((
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("\"visible").unwrap()])
+            .with_filter_on(FilterOn::Transformed)
+            .with_jq(Some((
                 crate::pipeline::validate_filter(".msg").unwrap(),
                 QueryMode::Replace,
-            )),
-            level_key: None,
-            color_assign: ColorAssignOpts {
-                pod_colors: false,
-                container_colors: false,
-                diff_container: false,
-            },
-            exit_on: vec![],
-            exit_on_level: None,
-            exit_watch: ExitWatchState::new(token),
-        };
+            )))
+            .build(ExitWatchState::new(token));
         let s = futures::stream::iter(vec![Ok(event)]);
-        let out: Vec<_> = apply_pipeline(s, stages).collect().await;
+        let out: Vec<_> = spec.apply(s).collect().await;
         assert_eq!(out.len(), 1);
         assert!(
             out[0].as_ref().unwrap().message.contains("visible"),

@@ -15,16 +15,15 @@ use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
 use super::cursor_store::ReconnectCursorStore;
 use super::forward::{LossyMetrics, RunStats, build_log_request_semaphore, forward_to_render};
 use super::mux::{MuxCmd, spawn_mux_task};
-use super::pipeline::{PipelineStages, apply_pipeline, compile_list};
 use super::pod_meta_cache::PodMetaCache;
+use super::spec::PipelineSpec;
 use super::watch::spawn_watch_task;
 use super::watch_admission::WatchAdmissionPolicy;
 use super::watch_ctx::{AttachDeps, PodWatchCtx};
 use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
 use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
 use crate::pipeline::ExitWatchState;
-use crate::pipeline::validate_filter;
-use crate::render::setup::{RenderSetupError, build_line_formatter, color_assign_opts};
+use crate::render::setup::{RenderSetupError, build_line_formatter};
 use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
 use crate::source::log_opener::PodLogSourceOpener;
 use crate::source::{ContextName, LogEvent, LogSourceError};
@@ -41,7 +40,7 @@ fn spawn_render_task(
 
 fn spawn_pipeline_forward_task(
     raw_event_rx: mpsc::Receiver<Result<LogEvent, LogSourceError>>,
-    stages: PipelineStages,
+    spec: PipelineSpec,
     render_tx: mpsc::Sender<RenderCommand>,
     fwd_cfg: RuntimeFwdConfig,
     metrics: Arc<LossyMetrics>,
@@ -49,7 +48,7 @@ fn spawn_pipeline_forward_task(
 ) -> JoinHandle<()> {
     let pipe_stream = {
         let s = ReceiverStream::new(raw_event_rx);
-        apply_pipeline(s, stages)
+        spec.apply(s)
     };
     tokio::spawn(forward_to_render(
         pipe_stream,
@@ -85,17 +84,8 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let ctx_name = pick_context_name(&kube_cfg, &cfg.context)?;
     let context_name = ContextName(ctx_name.to_string());
 
-    let includes = compile_list(&cfg.include)?;
-    let excludes = compile_list(&cfg.exclude)?;
-
-    let jq = match &cfg.json_query {
-        Some(expr) => Some((validate_filter(expr)?, cfg.json_query_mode)),
-        None => None,
-    };
-
-    let exit_on = compile_list(&cfg.exit_on)
-        .map_err(|e| RunError::Other(format!("invalid --exit-on regex: {e}")))?;
     let exit_watch = ExitWatchState::new(cfg.root_token.clone());
+    let pipeline = PipelineSpec::from_run_config(&cfg, exit_watch)?;
 
     let api: Api<Pod> = if cfg.all_namespaces {
         Api::all(client.clone())
@@ -174,19 +164,10 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
 
     let render_h = spawn_render_task(render_rx, formatter);
 
+    let pipeline_check = pipeline.clone();
     let pipe_h = spawn_pipeline_forward_task(
         raw_event_rx,
-        PipelineStages {
-            includes: includes.clone(),
-            excludes: excludes.clone(),
-            filter_on: cfg.filter_on,
-            jq: jq.clone(),
-            level_key: cfg.level_key.clone(),
-            color_assign: color_assign_opts(&cfg.formatter, cfg.diff_container),
-            exit_on,
-            exit_on_level: cfg.exit_on_level,
-            exit_watch: exit_watch.clone(),
-        },
+        pipeline,
         render_tx.clone(),
         cfg.fwd.clone(),
         metrics,
@@ -244,7 +225,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         ));
     }
 
-    if exit_watch.triggered() {
+    if pipeline_check.triggered() {
         return Err(RunError::ExitOnTriggered);
     }
 
