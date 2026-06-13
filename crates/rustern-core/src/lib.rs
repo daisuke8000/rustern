@@ -9,6 +9,10 @@ pub mod runtime;
 pub mod source;
 
 pub use discovery::context::ContextSelector;
+pub use discovery::run_resolution::{
+    RunResolutionError, RunResolutionInput, RunResolutionOutput, RunResolutionValidation,
+    resolve_run_input, resolve_run_namespaces, resolve_run_query,
+};
 pub use format_display::{TimestampStyle, TimestampZone};
 pub use pipeline::{CompiledFilter, FilterOn, JqError, QueryMode, validate_filter};
 pub use runtime::{

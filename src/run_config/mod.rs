@@ -17,7 +17,7 @@ use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 use crate::cli::{
     Cli, ColorArg, ContainerStateArg, FilterOnArg, FormatArg, JqModeArg, TimestampArg, parse_since,
 };
-use crate::run_defaults::{resolved_namespaces, resolved_pod_query};
+use crate::run_defaults::resolved_run;
 
 fn resolved_init_include(cli: &Cli) -> bool {
     if cli.no_init_containers {
@@ -109,6 +109,9 @@ impl Cli {
             .max_log_requests
             .unwrap_or(if self.follow() { 50 } else { 5 });
 
+        let resolution = resolved_run(self)?;
+        let all_namespaces = resolution.all_namespaces();
+
         let output_and_formatter = match self.format {
             FormatArg::Default => (
                 OutputMode::Default,
@@ -127,26 +130,22 @@ impl Cli {
             FormatArg::Json => (OutputMode::Json, FormatterChoice::Json),
             FormatArg::ExtJson => (
                 OutputMode::ExtJson,
-                FormatterChoice::ExtJson {
-                    all_namespaces: self.all_namespaces,
-                },
+                FormatterChoice::ExtJson { all_namespaces },
             ),
             FormatArg::PpExtJson => (
                 OutputMode::PpExtJson,
-                FormatterChoice::PpExtJson {
-                    all_namespaces: self.all_namespaces,
-                },
+                FormatterChoice::PpExtJson { all_namespaces },
             ),
             FormatArg::Raw => (OutputMode::Raw, FormatterChoice::Raw),
         };
 
-        let namespaces = resolved_namespaces(self)?;
+        let (query, namespaces, all_namespaces) = resolution.into_resolved();
 
         Ok(CoreRunConfig {
             context: self.context_selector(),
-            query: resolved_pod_query(self)?,
+            query,
             namespaces,
-            all_namespaces: self.all_namespaces,
+            all_namespaces,
             selector: self.selector.clone(),
             field_selector: self.field_selector.clone(),
             node: self.node.clone(),

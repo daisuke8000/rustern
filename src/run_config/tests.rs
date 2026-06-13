@@ -1,3 +1,8 @@
+//! `core_run_config` mapping tests: formatter, flags, and CLI→config wiring.
+//!
+//! Stern-compatible query/namespace defaults live in `rustern_core::discovery::run_resolution`
+//! unit tests; scope-resolution duplicates were removed from this module (DSK-69).
+
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -462,54 +467,6 @@ fn maps_condition_with_no_follow() {
     let cond = cfg.pod_condition.as_ref().unwrap();
     assert_eq!(cond.type_name, "ready");
     assert_eq!(cond.status, "False");
-}
-
-#[test]
-fn maps_implicit_query_with_label_selector() {
-    let cli = cli_with_default_ns(&["-l", "app=myapp"]);
-    cli.validate().unwrap();
-    let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-    assert_eq!(cfg.query, ".*");
-    assert_eq!(cfg.selector.as_deref(), Some("app=myapp"));
-}
-
-#[test]
-fn maps_implicit_query_with_field_selector() {
-    let cli = cli_with_default_ns(&["--field-selector", "metadata.name=foo"]);
-    cli.validate().unwrap();
-    let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-    assert_eq!(cfg.query, ".*");
-    assert_eq!(cfg.field_selector.as_deref(), Some("metadata.name=foo"));
-}
-
-#[test]
-fn maps_context_default_namespace_from_kubeconfig() {
-    use std::io::Write;
-    let kube = r#"
-apiVersion: v1
-kind: Config
-current-context: staging
-contexts:
-  - name: staging
-    context:
-      cluster: c
-      user: u
-      namespace: team-a
-clusters:
-  - name: c
-    cluster:
-      server: https://localhost
-users:
-  - name: u
-    user: {}
-"#;
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    f.write_all(kube.as_bytes()).unwrap();
-    let cli =
-        Cli::try_parse_from(["rstn", "--kubeconfig", f.path().to_str().unwrap(), "q"]).unwrap();
-    cli.validate().unwrap();
-    let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
-    assert_eq!(cfg.namespaces, vec!["team-a"]);
 }
 
 #[test]
