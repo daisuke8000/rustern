@@ -83,14 +83,16 @@ impl ExitWatchState {
     }
 }
 
-pub fn exit_watch_message<S>(
+pub fn exit_watch_message<S, P>(
     inner: S,
-    patterns: Arc<[Regex]>,
+    patterns: P,
     state: ExitWatchState,
 ) -> impl Stream<Item = Result<LogEvent, LogSourceError>>
 where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
+    P: Into<Arc<[Regex]>>,
 {
+    let patterns: Arc<[Regex]> = patterns.into();
     inner.then(move |r| {
         let state = state.clone();
         let patterns = Arc::clone(&patterns);
@@ -161,7 +163,7 @@ mod tests {
     async fn message_match_triggers_cancel() {
         let token = CancellationToken::new();
         let state = ExitWatchState::new(token.clone());
-        let patterns: Arc<[Regex]> = Arc::from(vec![Regex::new("panic").unwrap()]);
+        let patterns = vec![Regex::new("panic").unwrap()];
         let s = futures::stream::iter(vec![Ok(ev("oh no panic", None))]);
         let out: Vec<_> = exit_watch_message(s, patterns, state.clone())
             .collect()
@@ -175,7 +177,7 @@ mod tests {
     async fn message_no_match_does_not_trigger() {
         let token = CancellationToken::new();
         let state = ExitWatchState::new(token.clone());
-        let patterns: Arc<[Regex]> = Arc::from(vec![Regex::new("panic").unwrap()]);
+        let patterns = vec![Regex::new("panic").unwrap()];
         let s = futures::stream::iter(vec![Ok(ev("all fine", None))]);
         let _: Vec<_> = exit_watch_message(s, patterns, state.clone())
             .collect()

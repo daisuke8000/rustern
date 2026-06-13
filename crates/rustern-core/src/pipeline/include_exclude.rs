@@ -11,14 +11,18 @@ pub enum FilterOn {
     Original,
 }
 
-pub fn include_exclude<S>(
+pub fn include_exclude<S, I, E>(
     inner: S,
-    includes: Arc<[Regex]>,
-    excludes: Arc<[Regex]>,
+    includes: I,
+    excludes: E,
 ) -> impl Stream<Item = Result<LogEvent, LogSourceError>>
 where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
+    I: Into<Arc<[Regex]>>,
+    E: Into<Arc<[Regex]>>,
 {
+    let includes: Arc<[Regex]> = includes.into();
+    let excludes: Arc<[Regex]> = excludes.into();
     inner.filter_map(move |r| {
         let includes = Arc::clone(&includes);
         let excludes = Arc::clone(&excludes);
@@ -76,8 +80,8 @@ mod tests {
     #[tokio::test]
     async fn includes_matching_message() {
         let s = futures::stream::iter(vec![Ok(ev("boom error")), Ok(ev("boom info"))]);
-        let incl: Arc<[Regex]> = Arc::from(vec![Regex::new("error").unwrap()]);
-        let out: Vec<_> = include_exclude(s, incl, Arc::from([])).collect().await;
+        let incl = vec![Regex::new("error").unwrap()];
+        let out: Vec<_> = include_exclude(s, incl, vec![]).collect().await;
         assert_eq!(out.len(), 1);
         assert_eq!(&*out[0].as_ref().unwrap().message, "boom error");
     }
@@ -85,8 +89,8 @@ mod tests {
     #[tokio::test]
     async fn excludes_matching_message() {
         let s = futures::stream::iter(vec![Ok(ev("GET /healthz")), Ok(ev("POST /api"))]);
-        let excl: Arc<[Regex]> = Arc::from(vec![Regex::new("health").unwrap()]);
-        let out: Vec<_> = include_exclude(s, Arc::from([]), excl).collect().await;
+        let excl = vec![Regex::new("health").unwrap()];
+        let out: Vec<_> = include_exclude(s, vec![], excl).collect().await;
         assert_eq!(out.len(), 1);
         assert_eq!(&*out[0].as_ref().unwrap().message, "POST /api");
     }
@@ -94,8 +98,8 @@ mod tests {
     #[tokio::test]
     async fn include_takes_priority_over_exclude_when_both_match() {
         let s = futures::stream::iter(vec![Ok(ev("error and /healthz"))]);
-        let incl: Arc<[Regex]> = Arc::from(vec![Regex::new("error").unwrap()]);
-        let excl: Arc<[Regex]> = Arc::from(vec![Regex::new("health").unwrap()]);
+        let incl = vec![Regex::new("error").unwrap()];
+        let excl = vec![Regex::new("health").unwrap()];
         let out: Vec<_> = include_exclude(s, incl, excl).collect().await;
         assert_eq!(out.len(), 1);
     }
