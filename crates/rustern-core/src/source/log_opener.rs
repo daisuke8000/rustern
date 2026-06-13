@@ -7,10 +7,10 @@ use tokio_util::sync::CancellationToken;
 use super::pod_log::{PodLogRequest, PodLogSource};
 use super::{LogSource, LogSourceError, SourceMeta};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 use super::BoxedLogStream;
 
 pub(crate) trait LogSourceOpener: Send + Sync {
@@ -47,14 +47,14 @@ impl LogSourceOpener for PodLogSourceOpener {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 struct ScriptLogSource {
     meta: Arc<SourceMeta>,
     token: CancellationToken,
     inner: BoxedLogStream,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 impl LogSource for ScriptLogSource {
     fn meta(&self) -> &SourceMeta {
         self.meta.as_ref()
@@ -69,21 +69,21 @@ impl LogSource for ScriptLogSource {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct ScriptLogSourceOpener {
+#[cfg(any(test, feature = "bench"))]
+pub struct ScriptLogSourceOpener {
     scripts: std::sync::Mutex<Vec<Vec<Result<super::LogEvent, LogSourceError>>>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 impl ScriptLogSourceOpener {
-    pub(crate) fn new(scripts: Vec<Vec<Result<super::LogEvent, LogSourceError>>>) -> Arc<Self> {
+    pub fn new(scripts: Vec<Vec<Result<super::LogEvent, LogSourceError>>>) -> Arc<Self> {
         Arc::new(Self {
             scripts: std::sync::Mutex::new(scripts),
         })
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 impl LogSourceOpener for ScriptLogSourceOpener {
     fn open(
         &self,

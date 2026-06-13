@@ -28,6 +28,9 @@ jiff = { workspace = true }
 owo-colors = "4"
 seahash = "4"
 
+[features]
+bench = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }

@@ -110,7 +110,7 @@ impl PodLogSource {
                             let ev = LogEvent {
                                 source: meta.clone(),
                                 timestamp: ts,
-                                message: Arc::from(msg),
+                                message: msg,
                                 structured: None,
                                 level: None,
                                 palette_index: None,
@@ -164,13 +164,13 @@ async fn log_stream_with_retry(
 }
 
 /// Parse a kube log line with an optional RFC3339 prefix into `(timestamp, message)`.
-pub fn parse_log_line(raw: &str) -> (DateTime<Utc>, String) {
+pub fn parse_log_line(raw: &str) -> (DateTime<Utc>, Arc<str>) {
     if let Some((ts_s, msg)) = raw.split_once(' ')
         && let Ok(ts) = DateTime::parse_from_rfc3339(ts_s)
     {
-        return (ts.with_timezone(&Utc), msg.to_string());
+        return (ts.with_timezone(&Utc), Arc::from(msg));
     }
-    (Utc::now(), raw.to_string())
+    (Utc::now(), Arc::from(raw))
 }
 
 impl LogSource for PodLogSource {
@@ -240,5 +240,23 @@ mod tests {
         parse_since_time("2024-03-15T10:30:45Z").unwrap();
         assert!(parse_since_time("not-a-time").is_err());
         assert!(parse_since_time("").is_err());
+    }
+
+    #[test]
+    fn parse_log_line_strips_rfc3339_prefix() {
+        let (ts, msg) = parse_log_line("2024-03-15T10:30:45Z hello world");
+        assert_eq!(
+            ts,
+            DateTime::parse_from_rfc3339("2024-03-15T10:30:45Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        assert_eq!(&*msg, "hello world");
+    }
+
+    #[test]
+    fn parse_log_line_fallback_without_timestamp() {
+        let (_, msg) = parse_log_line("plain line without prefix");
+        assert_eq!(&*msg, "plain line without prefix");
     }
 }
