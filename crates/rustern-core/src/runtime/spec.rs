@@ -24,6 +24,7 @@
 
 use futures::stream::{BoxStream, Stream};
 use regex::Regex;
+use std::sync::Arc;
 
 use super::config::{CoreRunConfig, RunError};
 use super::pipeline::{PipelineStages, apply_pipeline};
@@ -34,8 +35,12 @@ use crate::pipeline::{
 use crate::runtime::FormatterChoice;
 use crate::source::{LogEvent, LogSourceError};
 
-fn compile_list(patterns: &[String]) -> Result<Vec<Regex>, regex::Error> {
-    patterns.iter().map(|s| Regex::new(s)).collect()
+fn compile_list(patterns: &[String]) -> Result<Arc<[Regex]>, regex::Error> {
+    patterns
+        .iter()
+        .map(|s| Regex::new(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|vec| vec.into())
 }
 
 fn color_assign_opts(formatter: &FormatterChoice, diff_container: bool) -> ColorAssignOpts {
@@ -116,21 +121,21 @@ impl PipelineSpec {
 /// Fluent builder for tests, benches, and ad-hoc pipeline wiring.
 #[derive(Clone)]
 pub struct PipelineSpecBuilder {
-    includes: Vec<Regex>,
-    excludes: Vec<Regex>,
+    includes: Arc<[Regex]>,
+    excludes: Arc<[Regex]>,
     filter_on: FilterOn,
     jq: Option<(CompiledFilter, QueryMode)>,
     level_key: Option<String>,
     color_assign: ColorAssignOpts,
-    exit_on: Vec<Regex>,
+    exit_on: Arc<[Regex]>,
     exit_on_level: Option<ExitOnLevel>,
 }
 
 impl Default for PipelineSpecBuilder {
     fn default() -> Self {
         Self {
-            includes: vec![],
-            excludes: vec![],
+            includes: Vec::new().into(),
+            excludes: Vec::new().into(),
             filter_on: FilterOn::Original,
             jq: None,
             level_key: None,
@@ -139,7 +144,7 @@ impl Default for PipelineSpecBuilder {
                 container_colors: false,
                 diff_container: false,
             },
-            exit_on: vec![],
+            exit_on: Vec::new().into(),
             exit_on_level: None,
         }
     }
@@ -151,12 +156,12 @@ impl PipelineSpecBuilder {
     }
 
     pub fn with_includes(mut self, patterns: Vec<Regex>) -> Self {
-        self.includes = patterns;
+        self.includes = patterns.into();
         self
     }
 
     pub fn with_excludes(mut self, patterns: Vec<Regex>) -> Self {
-        self.excludes = patterns;
+        self.excludes = patterns.into();
         self
     }
 
@@ -181,7 +186,7 @@ impl PipelineSpecBuilder {
     }
 
     pub fn with_exit_on(mut self, patterns: Vec<Regex>) -> Self {
-        self.exit_on = patterns;
+        self.exit_on = patterns.into();
         self
     }
 
