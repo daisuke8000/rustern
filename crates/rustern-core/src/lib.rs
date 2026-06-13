@@ -22,4 +22,6 @@ pub use runtime::{
 };
 #[doc(hidden)]
 pub use runtime::{PipelineStages, apply_pipeline};
+#[cfg(feature = "bench")]
+pub use source::ScriptLogSourceOpener;
 pub use source::pod_log::{PodLogRequest, parse_log_line};

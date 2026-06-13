@@ -12,6 +12,9 @@ pub mod log_opener;
 pub mod pod_log;
 pub mod pod_meta;
 
+#[cfg(any(test, feature = "bench"))]
+pub use log_opener::ScriptLogSourceOpener;
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ContextName(pub String);
 
