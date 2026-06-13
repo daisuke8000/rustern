@@ -74,14 +74,14 @@ fn bench_include_exclude(c: &mut Criterion) {
         ("json_4k", json_message_4k()),
     ] {
         let batch = event_batch(&msg);
-        let includes = vec![Regex::new("error|warn|GET").unwrap()];
-        let excludes = vec![Regex::new("healthz").unwrap()];
+        let includes: Arc<[Regex]> = vec![Regex::new("error|warn|GET").unwrap()].into();
+        let excludes: Arc<[Regex]> = vec![Regex::new("healthz").unwrap()].into();
 
         group.bench_with_input(BenchmarkId::new("filter", name), &batch, |b, batch| {
             b.iter(|| {
                 let events = batch.clone();
-                let includes = includes.clone();
-                let excludes = excludes.clone();
+                let includes = Arc::clone(&includes);
+                let excludes = Arc::clone(&excludes);
                 let out = rt.block_on(async move {
                     include_exclude(
                         stream::iter(events.into_iter().map(Ok::<_, LogSourceError>)),
