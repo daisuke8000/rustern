@@ -29,9 +29,15 @@ fn shard_index(key: &SourceKey) -> usize {
 }
 
 /// Last-seen log line timestamp per stream, used to resume follow streams after EOF.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct ReconnectCursorStore {
     inner: Arc<Vec<Mutex<HashMap<SourceKey, DateTime<Utc>>>>>,
+}
+
+impl Default for ReconnectCursorStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReconnectCursorStore {
