@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
@@ -6,7 +7,8 @@ use futures::stream;
 use rustern_core::pipeline::ExitWatchState;
 use rustern_core::render::RenderCommand;
 use rustern_core::runtime::{
-    LossyMetrics, MuxCmd, PipelineSpecBuilder, RuntimeFwdConfig, forward_to_render, spawn_mux_task,
+    BackpressurePolicy, LossyMetrics, MuxCmd, MuxMetrics, PipelineSpecBuilder, RuntimeFwdConfig,
+    forward_to_render, spawn_mux_task,
 };
 use rustern_core::source::{ContextName, Labels, LogEvent, SourceKey, SourceKind, SourceMeta};
 use tokio::runtime::Runtime;
@@ -16,15 +18,38 @@ use tokio_util::sync::CancellationToken;
 
 const BATCH: u64 = 2_000;
 const RAW_BUFFER: usize = 4_096;
+const TIERED_RAW_BUFFER: usize = 64;
 const RENDER_BUFFER: usize = 4_096;
 
 fn fwd_cfg(lossy: bool) -> RuntimeFwdConfig {
     RuntimeFwdConfig {
         buffer_size: RENDER_BUFFER,
         lossy,
+        mux_policy: BackpressurePolicy::from_lossy(lossy),
         stats: None,
         max_log_requests: 50,
     }
+}
+
+fn spawn_blocking_mux(
+    mux_rx: mpsc::Receiver<MuxCmd>,
+    raw_tx: mpsc::Sender<Result<LogEvent, rustern_core::source::LogSourceError>>,
+) -> tokio::task::JoinHandle<()> {
+    spawn_mux_task(
+        mux_rx,
+        raw_tx,
+        None,
+        BackpressurePolicy::Blocking,
+        MuxMetrics::new(None),
+    )
+}
+
+fn spawn_policy_mux(
+    mux_rx: mpsc::Receiver<MuxCmd>,
+    raw_tx: mpsc::Sender<Result<LogEvent, rustern_core::source::LogSourceError>>,
+    policy: BackpressurePolicy,
+) -> tokio::task::JoinHandle<()> {
+    spawn_mux_task(mux_rx, raw_tx, None, policy, MuxMetrics::new(None))
 }
 
 fn sample_key(i: usize) -> SourceKey {
@@ -94,6 +119,30 @@ async fn shutdown_mux_after_batch(
     received
 }
 
+async fn shutdown_mux_after_batch_lossy(
+    mux_tx: mpsc::Sender<MuxCmd>,
+    mux_h: tokio::task::JoinHandle<()>,
+    mut raw_rx: mpsc::Receiver<Result<LogEvent, rustern_core::source::LogSourceError>>,
+) -> usize {
+    drop(mux_tx);
+    tokio::time::timeout(Duration::from_secs(5), mux_h)
+        .await
+        .expect("mux task timed out")
+        .expect("mux task");
+    let mut received = 0usize;
+    loop {
+        match tokio::time::timeout(Duration::from_millis(10), raw_rx.recv()).await {
+            Ok(Some(row)) => {
+                let _ = black_box(row);
+                received += 1;
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    received
+}
+
 fn sample_event(i: usize) -> LogEvent {
     LogEvent {
         source: Arc::new(SourceMeta {
@@ -125,7 +174,7 @@ fn bench_mux_drain(c: &mut Criterion) {
             let count = rt.block_on(async {
                 let (mux_tx, mux_rx) = mpsc::channel(256);
                 let (raw_tx, raw_rx) = mpsc::channel(RAW_BUFFER);
-                let mux_h = spawn_mux_task(mux_rx, raw_tx, None);
+                let mux_h = spawn_blocking_mux(mux_rx, raw_tx);
 
                 let events: Vec<_> = (0..BATCH as usize).map(|i| Ok(sample_event(i))).collect();
                 let key = sample_key(0);
@@ -166,7 +215,7 @@ fn bench_mux_forward(c: &mut Criterion) {
                             LossyMetrics::new(None),
                             token.clone(),
                         ));
-                        let mux_h = spawn_mux_task(mux_rx, raw_tx, None);
+                        let mux_h = spawn_blocking_mux(mux_rx, raw_tx);
                         let events: Vec<_> =
                             (0..BATCH as usize).map(|i| Ok(sample_event(i))).collect();
                         mux_tx
@@ -219,7 +268,7 @@ fn bench_mux_pipeline_forward(c: &mut Criterion) {
                         LossyMetrics::new(None),
                         token.clone(),
                     ));
-                    let mux_h = spawn_mux_task(mux_rx, raw_tx, None);
+                    let mux_h = spawn_blocking_mux(mux_rx, raw_tx);
                     let events: Vec<_> = (0..BATCH as usize).map(|i| Ok(sample_event(i))).collect();
                     mux_tx
                         .send(MuxCmd::Add(
@@ -247,10 +296,59 @@ fn bench_mux_pipeline_forward(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_mux_tiered_policy(c: &mut Criterion) {
+    let rt = Runtime::new().expect("tokio runtime");
+    let mut group = c.benchmark_group("bench_mux_tiered_policy");
+    group.throughput(Throughput::Elements(BATCH));
+
+    for policy in [BackpressurePolicy::Blocking, BackpressurePolicy::Lossy] {
+        group.bench_with_input(
+            BenchmarkId::new("mux_policy", format!("{policy:?}")),
+            &policy,
+            |b, &policy| {
+                b.iter(|| {
+                    let count = rt.block_on(async {
+                        let (mux_tx, mux_rx) = mpsc::channel(256);
+                        let (raw_tx, raw_rx) = mpsc::channel(TIERED_RAW_BUFFER);
+                        let mux_h = spawn_policy_mux(mux_rx, raw_tx, policy);
+                        let events: Vec<_> =
+                            (0..BATCH as usize).map(|i| Ok(sample_event(i))).collect();
+                        mux_tx
+                            .send(MuxCmd::Add(
+                                sample_key(0),
+                                Box::pin(stream::iter(events.into_iter())),
+                            ))
+                            .await
+                            .expect("mux add");
+
+                        match policy {
+                            BackpressurePolicy::Blocking => {
+                                shutdown_mux_after_batch(mux_tx, mux_h, raw_rx, BATCH as usize)
+                                    .await
+                            }
+                            BackpressurePolicy::Lossy => {
+                                shutdown_mux_after_batch_lossy(mux_tx, mux_h, raw_rx).await
+                            }
+                        }
+                    });
+                    if policy == BackpressurePolicy::Blocking {
+                        assert_eq!(count, BATCH as usize);
+                    } else {
+                        black_box(count);
+                    }
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mux_drain,
     bench_mux_forward,
-    bench_mux_pipeline_forward
+    bench_mux_pipeline_forward,
+    bench_mux_tiered_policy
 );
 criterion_main!(benches);

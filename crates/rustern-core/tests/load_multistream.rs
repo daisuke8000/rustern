@@ -15,7 +15,8 @@ use rustern_core::pipeline::ExitWatchState;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{LineFormatter, RenderCommand, flush_ticker};
 use rustern_core::runtime::{
-    LossyMetrics, MuxCmd, PipelineSpecBuilder, RuntimeFwdConfig, forward_to_render, spawn_mux_task,
+    BackpressurePolicy, LossyMetrics, MuxCmd, MuxMetrics, PipelineSpecBuilder, RuntimeFwdConfig,
+    forward_to_render, spawn_mux_task,
 };
 use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{
@@ -31,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 const DEFAULT_CI_TOTAL_LINES: usize = 3_000;
 const DEFAULT_POD_COUNT: usize = 6;
 const RAW_MUX_BUFFER: usize = 4096;
+const TINY_RAW_MUX_BUFFER: usize = 8;
 const BLOCKING_RENDER_BUFFER: usize = 4096;
 const TEST_HARD_LIMIT: Duration = Duration::from_secs(20);
 const CONNECT_LIMIT: Duration = Duration::from_secs(8);
@@ -197,7 +199,14 @@ async fn run_mux_raw_load(pods: usize, lines_per_pod: usize) -> u64 {
 
     let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
     let (raw_tx, mut raw_rx) = mpsc::channel::<Result<LogEvent, LogSourceError>>(RAW_MUX_BUFFER);
-    let mux_h = spawn_mux_task(mux_rx, raw_tx, None);
+    let mux_metrics = MuxMetrics::new(None);
+    let mux_h = spawn_mux_task(
+        mux_rx,
+        raw_tx,
+        None,
+        BackpressurePolicy::Blocking,
+        mux_metrics,
+    );
 
     for (key, stream) in streams {
         mux_add(&mux_tx, key, stream).await;
@@ -222,7 +231,12 @@ async fn run_mux_raw_load(pods: usize, lines_per_pod: usize) -> u64 {
     got
 }
 
-async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u64) {
+async fn run_pipeline_render_load(
+    lossy: bool,
+    render_buffer: usize,
+    mux_policy: BackpressurePolicy,
+    raw_buffer: usize,
+) -> (u64, u64, u64) {
     let scale = load_scale();
     let expected = (scale.pods * scale.lines_per_pod) as u64;
 
@@ -246,8 +260,9 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
     let streams = connect_mock_sources(mock, pods, token.clone()).await;
 
     let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
-    let (raw_tx, raw_rx) = mpsc::channel::<Result<LogEvent, LogSourceError>>(RAW_MUX_BUFFER);
-    let mux_h = spawn_mux_task(mux_rx, raw_tx, None);
+    let (raw_tx, raw_rx) = mpsc::channel::<Result<LogEvent, LogSourceError>>(raw_buffer);
+    let mux_metrics = MuxMetrics::new(None);
+    let mux_h = spawn_mux_task(mux_rx, raw_tx, None, mux_policy, mux_metrics.clone());
 
     let metrics = LossyMetrics::new(None);
     let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(render_buffer.max(1));
@@ -257,6 +272,7 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
     let fwd_cfg = RuntimeFwdConfig {
         buffer_size: render_buffer,
         lossy,
+        mux_policy,
         stats: None,
         max_log_requests: pods,
     };
@@ -321,7 +337,66 @@ async fn run_pipeline_render_load(lossy: bool, render_buffer: usize) -> (u64, u6
     join_with_deadline("mux", mux_h).await;
     join_with_deadline("mock_log_server", server).await;
 
-    (delivered, metrics.drop_count())
+    (
+        delivered,
+        mux_metrics.mux_drop_count(),
+        metrics.drop_count(),
+    )
+}
+
+async fn run_mux_lossy_load(raw_buffer: usize) -> u64 {
+    let scale = load_scale();
+    let (mock, mut handle) =
+        tower_test::mock::pair::<Request<kube::client::Body>, Response<kube::client::Body>>();
+    let pods = scale.pods;
+    let lines_per_pod = scale.lines_per_pod;
+    let server = tokio::spawn(async move {
+        for p in 0..pods {
+            let (_req, send) = handle.next_request().await.expect("mock log request");
+            let body = log_body(&format!("pod-{p}"), lines_per_pod);
+            let resp = Response::builder()
+                .status(StatusCode::OK)
+                .body(kube::client::Body::from(body.into_bytes()))
+                .unwrap();
+            send.send_response(resp);
+        }
+    });
+
+    let token = CancellationToken::new();
+    let streams = connect_mock_sources(mock, pods, token.clone()).await;
+
+    let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
+    let (raw_tx, raw_rx) = mpsc::channel::<Result<LogEvent, LogSourceError>>(raw_buffer);
+    let mux_metrics = MuxMetrics::new(None);
+    let mux_h = spawn_mux_task(
+        mux_rx,
+        raw_tx,
+        None,
+        BackpressurePolicy::Lossy,
+        mux_metrics.clone(),
+    );
+
+    // Hold the raw consumer through the observation window so the channel stays Full.
+    let (release_raw_tx, release_raw_rx) = oneshot::channel();
+    let hold_raw = tokio::spawn(async move {
+        let _guard = raw_rx;
+        let _ = release_raw_rx.await;
+    });
+
+    for (key, stream) in streams {
+        mux_add(&mux_tx, key, stream).await;
+    }
+
+    tokio::time::sleep(LOSSY_OBSERVE).await;
+
+    let _ = release_raw_tx.send(());
+    join_with_deadline("hold_raw", hold_raw).await;
+    drop(mux_tx);
+    token.cancel();
+    join_with_deadline("mux", mux_h).await;
+    join_with_deadline("mock_log_server", server).await;
+
+    mux_metrics.mux_drop_count()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -343,8 +418,13 @@ async fn blocking_pipeline_renders_all_multistream_lines() {
         async {
             let scale = load_scale();
             let expected = (scale.pods * scale.lines_per_pod) as u64;
-            let (delivered, dropped) =
-                run_pipeline_render_load(false, BLOCKING_RENDER_BUFFER).await;
+            let (delivered, _mux_dropped, dropped) = run_pipeline_render_load(
+                false,
+                BLOCKING_RENDER_BUFFER,
+                BackpressurePolicy::Blocking,
+                RAW_MUX_BUFFER,
+            )
+            .await;
             assert_eq!(delivered, expected, "all lines should reach render");
             assert_eq!(dropped, 0, "blocking mode must not drop");
         },
@@ -360,7 +440,9 @@ async fn lossy_drops_when_render_backpressured() {
         async {
             let scale = load_scale();
             let expected = (scale.pods * scale.lines_per_pod) as u64;
-            let (delivered, dropped) = run_pipeline_render_load(true, 4).await;
+            let (delivered, _mux_dropped, dropped) =
+                run_pipeline_render_load(true, 4, BackpressurePolicy::Blocking, RAW_MUX_BUFFER)
+                    .await;
             assert!(
                 dropped > 0,
                 "lossy mode with tiny render channel should drop events"
@@ -368,6 +450,48 @@ async fn lossy_drops_when_render_backpressured() {
             assert!(
                 delivered < expected,
                 "backpressure should prevent full delivery in lossy mode"
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mux_lossy_drops_when_raw_channel_full() {
+    with_deadline(
+        "mux_lossy_drops_when_raw_channel_full",
+        TEST_HARD_LIMIT,
+        async {
+            // Tier 1 (mux → raw): drops when the raw channel is full while render is not held.
+            // Contrast with `lossy_drops_when_render_backpressured`, which exercises tier 2 only.
+            let mux_dropped = run_mux_lossy_load(TINY_RAW_MUX_BUFFER).await;
+            assert!(
+                mux_dropped > 0,
+                "lossy mux with tiny raw channel should drop events at the mux tier"
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn multi_tier_lossy_distributes_drops() {
+    with_deadline(
+        "multi_tier_lossy_distributes_drops",
+        TEST_HARD_LIMIT,
+        async {
+            let scale = load_scale();
+            let expected = (scale.pods * scale.lines_per_pod) as u64;
+            let (delivered, mux_dropped, forward_dropped) =
+                run_pipeline_render_load(true, 4, BackpressurePolicy::Lossy, TINY_RAW_MUX_BUFFER)
+                    .await;
+            assert!(
+                mux_dropped > 0 && forward_dropped > 0,
+                "both tiers should record drops under combined lossy backpressure"
+            );
+            assert!(
+                delivered < expected,
+                "combined tier drops should prevent full delivery"
             );
         },
     )

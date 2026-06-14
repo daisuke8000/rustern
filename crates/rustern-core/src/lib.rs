@@ -16,9 +16,10 @@ pub use discovery::run_resolution::{
 pub use format_display::{TimestampStyle, TimestampZone};
 pub use pipeline::{CompiledFilter, FilterOn, JqError, QueryMode, validate_filter};
 pub use runtime::{
-    CoreRunConfig, FormatterChoice, LossyMetrics, MuxCmd, OutputMode, PipelineSpec,
-    PipelineSpecBuilder, RunError, RunOutcome, RunStats, RuntimeFwdConfig, RuntimeStatsConfig,
-    build_log_request_semaphore, forward_to_render, run, spawn_mux_task,
+    BackpressurePolicy, CoreRunConfig, FormatterChoice, LossyMetrics, MuxCmd, MuxMetrics,
+    OutputMode, PipelineSpec, PipelineSpecBuilder, RunError, RunOutcome, RunStats,
+    RuntimeFwdConfig, RuntimeStatsConfig, build_log_request_semaphore, forward_to_render, run,
+    spawn_mux_task,
 };
 #[doc(hidden)]
 pub use runtime::{PipelineStages, apply_pipeline};

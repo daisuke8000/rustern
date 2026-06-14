@@ -1,4 +1,10 @@
-//! Forward to renderer, `LossyMetrics`, concurrent log stream semaphore.
+//! Forward to renderer, backpressure metrics, concurrent log stream semaphore.
+//!
+//! ## Backpressure metrics
+//!
+//! [`MuxMetrics`] counts drops at the mux → raw pipeline channel (tier 1).
+//! [`LossyMetrics`] counts drops at the forward → render channel (tier 2).
+//! Each tier can use [`BackpressurePolicy`] independently.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,7 +16,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::config::RuntimeFwdConfig;
+use super::config::{BackpressurePolicy, RuntimeFwdConfig};
 use crate::render::RenderCommand;
 use crate::source::{LogEvent, LogSourceError};
 
@@ -19,6 +25,7 @@ pub struct RunStatsSnapshot {
     pub active_streams: u64,
     pub forwarded_lines: u64,
     pub dropped_lines: u64,
+    pub mux_dropped_lines: u64,
 }
 
 #[derive(Debug)]
@@ -26,19 +33,31 @@ pub struct RunStats {
     active_streams: AtomicU64,
     forwarded_lines: AtomicU64,
     dropped_lines: AtomicU64,
+    mux_dropped_lines: AtomicU64,
     source_errors: AtomicU64,
     lossy: bool,
+    mux_lossy: bool,
 }
 
 impl RunStats {
     pub fn new(lossy: bool) -> Arc<Self> {
+        Self::with_mux_policy(lossy, BackpressurePolicy::Blocking)
+    }
+
+    pub fn with_mux_policy(lossy: bool, mux_policy: BackpressurePolicy) -> Arc<Self> {
         Arc::new(Self {
             active_streams: AtomicU64::new(0),
             forwarded_lines: AtomicU64::new(0),
             dropped_lines: AtomicU64::new(0),
+            mux_dropped_lines: AtomicU64::new(0),
             source_errors: AtomicU64::new(0),
             lossy,
+            mux_lossy: mux_policy == BackpressurePolicy::Lossy,
         })
+    }
+
+    pub fn from_fwd(fwd: &RuntimeFwdConfig) -> Arc<Self> {
+        Self::with_mux_policy(fwd.lossy, fwd.resolved_mux_policy())
     }
 
     pub fn record_source_api_error(&self) {
@@ -62,36 +81,53 @@ impl RunStats {
         self.dropped_lines.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_mux_dropped_line(&self) {
+        self.mux_dropped_lines.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn snapshot_and_reset(&self) -> RunStatsSnapshot {
         RunStatsSnapshot {
             active_streams: self.active_streams.load(Ordering::Relaxed),
             forwarded_lines: self.forwarded_lines.swap(0, Ordering::Relaxed),
             dropped_lines: self.dropped_lines.swap(0, Ordering::Relaxed),
+            mux_dropped_lines: self.mux_dropped_lines.swap(0, Ordering::Relaxed),
         }
     }
 
     pub fn format_window(&self, interval: Duration) -> String {
-        Self::format_snapshot(self.snapshot_and_reset(), interval, self.lossy)
+        Self::format_snapshot(
+            self.snapshot_and_reset(),
+            interval,
+            self.lossy,
+            self.mux_lossy,
+        )
     }
 
-    fn format_snapshot(snapshot: RunStatsSnapshot, interval: Duration, lossy: bool) -> String {
+    fn format_snapshot(
+        snapshot: RunStatsSnapshot,
+        interval: Duration,
+        lossy: bool,
+        mux_lossy: bool,
+    ) -> String {
         let interval = format!("{interval:?}");
         let interval = interval.as_str();
+        let mut parts = vec![
+            format!("active streams={}", snapshot.active_streams),
+            format!("forwarded lines={}/{}", snapshot.forwarded_lines, interval),
+        ];
         if lossy {
-            format!(
-                "stats: active streams={}, forwarded lines={}/{}, dropped lines={}/{}",
-                snapshot.active_streams,
-                snapshot.forwarded_lines,
-                interval,
-                snapshot.dropped_lines,
-                interval
-            )
-        } else {
-            format!(
-                "stats: active streams={}, forwarded lines={}/{}",
-                snapshot.active_streams, snapshot.forwarded_lines, interval
-            )
+            parts.push(format!(
+                "dropped lines={}/{}",
+                snapshot.dropped_lines, interval
+            ));
         }
+        if mux_lossy {
+            parts.push(format!(
+                "mux dropped lines={}/{}",
+                snapshot.mux_dropped_lines, interval
+            ));
+        }
+        format!("stats: {}", parts.join(", "))
     }
 
     pub async fn stderr_reporter(self: Arc<Self>, interval: Duration, token: CancellationToken) {
@@ -115,6 +151,32 @@ impl RunStats {
                     }
                 }
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MuxMetrics {
+    mux_dropped: AtomicU64,
+    stats: Option<Arc<RunStats>>,
+}
+
+impl MuxMetrics {
+    pub fn new(stats: Option<Arc<RunStats>>) -> Arc<Self> {
+        Arc::new(Self {
+            mux_dropped: AtomicU64::new(0),
+            stats,
+        })
+    }
+
+    pub fn mux_drop_count(&self) -> u64 {
+        self.mux_dropped.load(Ordering::Relaxed)
+    }
+
+    pub fn record_mux_drop(&self) {
+        self.mux_dropped.fetch_add(1, Ordering::Relaxed);
+        if let Some(stats) = &self.stats {
+            stats.record_mux_dropped_line();
         }
     }
 }
@@ -172,6 +234,11 @@ impl LossyMetrics {
     }
 }
 
+/// Forwards pipeline output to the render channel.
+///
+/// When [`RuntimeFwdConfig::lossy`] is enabled, uses `try_send` and records drops via
+/// [`LossyMetrics`]. The mux tier may apply [`BackpressurePolicy::Lossy`] independently;
+/// in that case this function already receives a subset of multiplexed events.
 pub async fn forward_to_render(
     mut source_stream: impl Stream<Item = Result<LogEvent, LogSourceError>> + Unpin,
     tx: mpsc::Sender<RenderCommand>,
@@ -261,6 +328,7 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 1024,
                 lossy: false,
+                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },
@@ -314,6 +382,7 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 1,
                 lossy: true,
+                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },
@@ -363,6 +432,7 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 1,
                 lossy: true,
+                mux_policy: BackpressurePolicy::Blocking,
                 max_log_requests: 10,
                 stats: Some(crate::runtime::RuntimeStatsConfig {
                     interval: Duration::from_secs(30),
@@ -421,6 +491,7 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 8,
                 lossy: false,
+                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },
@@ -459,6 +530,7 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 8,
                 lossy: false,
+                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },
@@ -478,6 +550,14 @@ mod tests {
         assert_eq!(
             lossy.format_window(Duration::from_secs(30)),
             "stats: active streams=2, forwarded lines=1/30s, dropped lines=1/30s"
+        );
+
+        let mux_lossy = RunStats::with_mux_policy(false, BackpressurePolicy::Lossy);
+        mux_lossy.set_active_streams(1);
+        mux_lossy.record_mux_dropped_line();
+        assert_eq!(
+            mux_lossy.format_window(Duration::from_secs(30)),
+            "stats: active streams=1, forwarded lines=0/30s, mux dropped lines=1/30s"
         );
 
         let lossless = RunStats::new(false);

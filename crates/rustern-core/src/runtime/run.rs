@@ -13,7 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
 use super::cursor_store::ReconnectCursorStore;
-use super::forward::{LossyMetrics, RunStats, build_log_request_semaphore, forward_to_render};
+use super::forward::{
+    LossyMetrics, MuxMetrics, RunStats, build_log_request_semaphore, forward_to_render,
+};
 use super::mux::{MuxCmd, spawn_mux_task};
 use super::pod_meta_cache::PodMetaCache;
 use super::spec::PipelineSpec;
@@ -122,8 +124,15 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     };
     let follow_limit_notifier = follow_lim.as_ref().map(|(s, _)| s.clone());
 
-    let stats = RunStats::new(cfg.fwd.lossy);
-    let h_mux = spawn_mux_task(mux_rx, raw_event_tx, Some(stats.clone()));
+    let stats = RunStats::from_fwd(&cfg.fwd);
+    let mux_metrics = MuxMetrics::new(Some(stats.clone()));
+    let h_mux = spawn_mux_task(
+        mux_rx,
+        raw_event_tx,
+        Some(stats.clone()),
+        cfg.fwd.resolved_mux_policy(),
+        mux_metrics,
+    );
 
     let metrics = LossyMetrics::new(Some(stats.clone()));
     let metrics_rep = metrics.clone();
