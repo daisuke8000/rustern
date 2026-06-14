@@ -1,3 +1,9 @@
+//! Pod log stream attach and cursor tracking.
+//!
+//! The attach semaphore limits how many log streams may *start* concurrently.
+//! That cap is independent of mux/forward backpressure policies, which govern
+//! behaviour when internal channels are full after a stream is running.
+
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};

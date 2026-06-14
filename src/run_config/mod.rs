@@ -198,6 +198,7 @@ impl Cli {
             fwd: RuntimeFwdConfig {
                 buffer_size: self.buffer_size,
                 lossy: self.lossy,
+                mux_policy: rustern_core::runtime::BackpressurePolicy::from_lossy(self.lossy),
                 stats: self.stats.then_some(RuntimeStatsConfig {
                     interval: self.stats_interval,
                 }),

@@ -11,6 +11,10 @@ use crate::source::log_opener::LogSourceOpener;
 use crate::source::pod_log::PodLogRequest;
 
 /// Runtime dependencies shared by attach and stream registry reconciliation.
+///
+/// [`sem`](Self::sem) bounds concurrent stream *starts* (API attach parallelism).
+/// Mux and forward tiers apply [`BackpressurePolicy`](crate::runtime::BackpressurePolicy)
+/// separately once streams are multiplexed and forwarded.
 #[derive(Clone)]
 pub(crate) struct AttachDeps {
     pub(crate) mux_tx: mpsc::Sender<MuxCmd>,

@@ -28,10 +28,12 @@ mod watch_admission;
 mod watch_ctx;
 
 pub use config::{
-    CoreRunConfig, FormatterChoice, OutputMode, RunError, RunOutcome, RuntimeFwdConfig,
-    RuntimeStatsConfig,
+    BackpressurePolicy, CoreRunConfig, FormatterChoice, OutputMode, RunError, RunOutcome,
+    RuntimeFwdConfig, RuntimeStatsConfig,
 };
-pub use forward::{LossyMetrics, RunStats, build_log_request_semaphore, forward_to_render};
+pub use forward::{
+    LossyMetrics, MuxMetrics, RunStats, build_log_request_semaphore, forward_to_render,
+};
 pub use mux::{MuxCmd, spawn_mux_task};
 // Migration-only exports; use `PipelineSpec` instead (scheduled for removal).
 #[doc(hidden)]

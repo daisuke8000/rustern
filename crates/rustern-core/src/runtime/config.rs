@@ -11,6 +11,22 @@ use crate::format_display::{TimestampStyle, TimestampZone};
 use crate::pipeline::{FilterOn, QueryMode};
 use crate::source::pod_log::PodLogRequest;
 
+/// Backpressure policy for a bounded channel tier (mux raw queue or forward render queue).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BackpressurePolicy {
+    /// Block the producer until capacity is available.
+    Blocking,
+    /// Drop events when the channel is full.
+    Lossy,
+}
+
+impl BackpressurePolicy {
+    /// Map the legacy forward `--lossy` flag to a mux-tier policy (same knob until split).
+    pub fn from_lossy(lossy: bool) -> Self {
+        if lossy { Self::Lossy } else { Self::Blocking }
+    }
+}
+
 /// Bounded queue and parallelism hints for forwarded log events (`run` runtime).
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct RuntimeStatsConfig {
@@ -23,8 +39,10 @@ pub struct RuntimeStatsConfig {
 pub struct RuntimeFwdConfig {
     /// Render channel capacity.
     pub buffer_size: usize,
-    /// Skip lines instead of blocking when the render queue is full.
+    /// Skip lines instead of blocking when the forward → render queue is full (tier 2).
     pub lossy: bool,
+    /// Skip lines instead of blocking when the mux → raw pipeline queue is full (tier 1).
+    pub mux_policy: BackpressurePolicy,
     /// Optional stderr stats reporter.
     pub stats: Option<RuntimeStatsConfig>,
     /// Upper bound on concurrent pod log streams.
@@ -34,6 +52,11 @@ pub struct RuntimeFwdConfig {
 impl RuntimeFwdConfig {
     pub(crate) fn render_channel_capacity(&self) -> usize {
         self.buffer_size.max(1)
+    }
+
+    /// Mux-tier backpressure policy (`spawn_mux_task`).
+    pub fn resolved_mux_policy(&self) -> BackpressurePolicy {
+        self.mux_policy
     }
 }
 
@@ -172,6 +195,7 @@ mod tests {
         let fwd = RuntimeFwdConfig {
             buffer_size: 8192,
             lossy: false,
+            mux_policy: BackpressurePolicy::Blocking,
             stats: None,
             max_log_requests: 10,
         };
@@ -183,6 +207,7 @@ mod tests {
         let fwd = RuntimeFwdConfig {
             buffer_size: 0,
             lossy: false,
+            mux_policy: BackpressurePolicy::Blocking,
             stats: None,
             max_log_requests: 10,
         };
