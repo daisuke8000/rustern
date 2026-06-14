@@ -6,5 +6,4 @@ mod pod_reconcile;
 pub mod pod_watcher;
 pub mod resource;
 pub mod run_resolution;
-pub(crate) mod watch_scope;
 pub mod workload_selector;
