@@ -81,13 +81,13 @@ where
         async move {
             match r {
                 Ok(mut ev) => {
-                    let Some(v) = ev.structured.as_ref() else {
+                    let Some(v) = ev.structured.take() else {
                         return match mode {
                             QueryMode::Filter => None,
                             _ => Some(Ok(ev)),
                         };
                     };
-                    let value: Val = match serde_json::from_value(v.clone()) {
+                    let value: Val = match serde_json::from_value(v) {
                         Ok(v) => v,
                         Err(_) => return Some(Ok(ev)),
                     };
@@ -175,6 +175,7 @@ mod tests {
         let s = futures::stream::iter(vec![Ok(ev_json(raw))]);
         let out: Vec<_> = jq_evaluate(s, f, QueryMode::Replace).collect().await;
         assert_eq!(&*out[0].as_ref().unwrap().message, "\"error\"");
+        assert!(out[0].as_ref().unwrap().structured.is_none());
     }
 
     #[tokio::test]
