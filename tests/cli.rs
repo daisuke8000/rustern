@@ -1,6 +1,8 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+const RESOLUTION_QUERY_ERR: &str = "pod query (QUERY) is required";
+
 #[test]
 fn help_lists_usage_and_query() {
     Command::cargo_bin("rstn")
@@ -108,3 +110,28 @@ fn validate_rejects_zero_stats_interval() {
         .code(2)
         .stderr(predicate::str::contains("--stats-interval must be > 0"));
 }
+
+#[test]
+fn label_selector_with_all_namespaces_passes_resolution() {
+    Command::cargo_bin("rstn")
+        .unwrap()
+        .args(["-A", "-l", "app=foo", "--no-follow"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(RESOLUTION_QUERY_ERR).not());
+}
+
+#[test]
+fn label_selector_with_explicit_namespace_passes_resolution() {
+    Command::cargo_bin("rstn")
+        .unwrap()
+        .args(["-l", "app=foo", "-n", "ns1", "--no-follow"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(RESOLUTION_QUERY_ERR).not());
+}
+
+// Kubecontext default namespace is covered by `run_resolution` unit tests
+// (`implicit_namespace_from_kubeconfig`); a blackbox run would block in `run()` on API connect.
