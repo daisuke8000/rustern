@@ -88,17 +88,17 @@ impl PodLogSource {
     /// Start tailing stdout/stderr logs for [`SourceMeta`] (connects kube log subresource).
     pub async fn start(
         client: Client,
-        meta: SourceMeta,
+        meta: Arc<SourceMeta>,
         token: CancellationToken,
         req: PodLogRequest,
     ) -> Result<Self, LogSourceError> {
         let api: Api<Pod> = Api::namespaced(client, &meta.namespace);
-        let params = build_log_params(&meta, &req);
+        let params = build_log_params(meta.as_ref(), &req);
         let reader = log_stream_with_retry(&api, &meta.pod, &params, 3).await?;
         let reader = BufReader::new(reader);
         let lines = reader.lines();
 
-        let meta_arc = Arc::new(meta.clone());
+        let meta_arc = Arc::clone(&meta);
         let stream = futures::stream::unfold(
             (lines, meta_arc, token.clone()),
             |(mut lines, meta, token)| async move {
@@ -129,7 +129,7 @@ impl PodLogSource {
         );
 
         Ok(Self {
-            meta: Arc::new(meta),
+            meta,
             token,
             inner: Box::pin(stream),
         })

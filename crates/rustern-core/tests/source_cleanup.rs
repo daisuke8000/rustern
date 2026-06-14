@@ -41,7 +41,7 @@ async fn cancelled_source_drops_all_resources_within_100ms() {
 
     let src = PodLogSource::start(
         client,
-        meta,
+        Arc::new(meta),
         pod_token.clone(),
         PodLogRequest {
             follow: true,
