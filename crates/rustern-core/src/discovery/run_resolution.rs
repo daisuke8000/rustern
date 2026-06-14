@@ -1,10 +1,5 @@
 //! Unified run resolution: pod query and namespace scope before [`CoreRunConfig`](crate::runtime::CoreRunConfig).
 //!
-//! This is the **public** resolution API for rustern-core. [`super::watch_scope`] is an internal
-//! implementation detail (`pub(crate)`); use [`RunResolutionInput`] and [`resolve_run_input`] in
-//! new code. Names do not collide: `watch_scope` exports `WatchScope*` while this module exports
-//! `RunResolution*`.
-//!
 //! ## Recommended usage
 //!
 //! Build a [`RunResolutionInput`] from CLI flags (or test fixtures), then call [`resolve_run_input`]
@@ -40,11 +35,9 @@
 //!   → PodWatchPlanConfig { query, namespaces, all_namespaces, selector, field_selector, node }
 //! ```
 
-use super::context::ContextSelector;
-use super::watch_scope::{
-    WatchScopeError, WatchScopeInput, WatchScopeResolved, resolve_namespaces, resolve_pod_query,
-    resolve_watch_scope,
-};
+use super::context::{ContextError, ContextSelector, default_namespace, resolve_kubeconfig};
+
+const IMPLICIT_POD_QUERY: &str = ".*";
 
 /// CLI-agnostic inputs for unified run resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,24 +49,6 @@ pub struct RunResolutionInput<'a> {
     pub node: Option<&'a str>,
     pub all_namespaces: bool,
     pub namespace_flags: &'a [String],
-}
-
-impl<'a> From<RunResolutionInput<'a>> for WatchScopeInput<'a> {
-    fn from(input: RunResolutionInput<'a>) -> Self {
-        WatchScopeInput {
-            query: input.query,
-            selector: input.selector,
-            field_selector: input.field_selector,
-            all_namespaces: input.all_namespaces,
-            namespace_flags: input.namespace_flags,
-        }
-    }
-}
-
-impl<'a> From<&RunResolutionInput<'a>> for WatchScopeInput<'a> {
-    fn from(input: &RunResolutionInput<'a>) -> Self {
-        WatchScopeInput::from(*input)
-    }
 }
 
 /// How query and namespace defaults were applied (diagnostics / future R2 gates).
@@ -116,39 +91,69 @@ impl RunResolutionOutput {
             self.all_namespaces,
         )
     }
-
-    /// Backward-compatible view for code still using [`WatchScopeResolved`].
-    pub fn as_watch_scope_resolved(&self) -> WatchScopeResolved {
-        WatchScopeResolved {
-            query: self.resolved_query.clone(),
-            namespaces: self.resolved_namespaces.clone(),
-            all_namespaces: self.all_namespaces,
-        }
-    }
 }
 
-impl From<WatchScopeResolved> for RunResolutionOutput {
-    /// Legacy conversion; validation flags are unavailable from [`WatchScopeResolved`] alone.
-    ///
-    /// `implicit_query_from_selector` is always `false` here. Use [`resolve_run_input`] when
-    /// accurate validation metadata is required.
-    fn from(resolved: WatchScopeResolved) -> Self {
-        Self {
-            resolved_query: resolved.query,
-            resolved_namespaces: resolved.namespaces,
-            all_namespaces: resolved.all_namespaces,
-            validation: RunResolutionValidation {
-                implicit_query_from_selector: false,
-            },
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum RunResolutionError {
+    #[error("pod query (QUERY) is required unless `-l` or `--field-selector` is set")]
+    QueryRequired,
+    #[error(transparent)]
+    Context(#[from] ContextError),
 }
-
-/// Resolution failure (alias of internal [`WatchScopeError`]).
-pub type RunResolutionError = WatchScopeError;
 
 fn implicit_query_from_selector(input: &RunResolutionInput<'_>) -> bool {
     input.query.is_none() && (input.selector.is_some() || input.field_selector.is_some())
+}
+
+/// Resolve the pod query positional, applying stern-like defaults.
+///
+/// When `-l` / `--selector` or `--field-selector` is set, an omitted QUERY becomes `.*`.
+/// An explicit `.` with a label selector is preserved for runner compat (see `PodWatchPlan::build`).
+/// An explicit `.` with only `--field-selector` normalizes to `.*` for stern-like wildcard scope.
+fn resolve_pod_query(input: &RunResolutionInput<'_>) -> Result<String, RunResolutionError> {
+    if let Some(q) = input.query {
+        if q == "." && input.selector.is_none() && input.field_selector.is_some() {
+            return Ok(IMPLICIT_POD_QUERY.to_string());
+        }
+        return Ok(q.to_string());
+    }
+    if input.selector.is_some() || input.field_selector.is_some() {
+        return Ok(IMPLICIT_POD_QUERY.to_string());
+    }
+    Err(RunResolutionError::QueryRequired)
+}
+
+fn deduped_explicit_namespaces(namespace_flags: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in namespace_flags {
+        for seg in part.split(',') {
+            let t = seg.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if !out.iter().any(|n| n == t) {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Resolve namespace scope: `-A` → empty; explicit `-n` → deduped list; else active context namespace.
+fn resolve_namespaces(
+    input: &RunResolutionInput<'_>,
+    context: &ContextSelector,
+) -> Result<Vec<String>, RunResolutionError> {
+    if input.all_namespaces {
+        return Ok(Vec::new());
+    }
+    let explicit = deduped_explicit_namespaces(input.namespace_flags);
+    if !explicit.is_empty() {
+        return Ok(explicit);
+    }
+    let kubeconfig = resolve_kubeconfig(context)?;
+    let ns = default_namespace(&kubeconfig, context)?;
+    Ok(vec![ns])
 }
 
 /// Resolve pod query and namespace scope together (stern-compatible defaults).
@@ -156,13 +161,11 @@ pub fn resolve_run_input(
     input: &RunResolutionInput<'_>,
     context: &ContextSelector,
 ) -> Result<RunResolutionOutput, RunResolutionError> {
-    let scope: WatchScopeInput<'_> = input.into();
     let implicit_query = implicit_query_from_selector(input);
-    let resolved = resolve_watch_scope(&scope, context)?;
     Ok(RunResolutionOutput {
-        resolved_query: resolved.query,
-        resolved_namespaces: resolved.namespaces,
-        all_namespaces: resolved.all_namespaces,
+        resolved_query: resolve_pod_query(input)?,
+        resolved_namespaces: resolve_namespaces(input, context)?,
+        all_namespaces: input.all_namespaces,
         validation: RunResolutionValidation {
             implicit_query_from_selector: implicit_query,
         },
@@ -171,7 +174,7 @@ pub fn resolve_run_input(
 
 /// Resolve only the pod query positional (stern-like defaults).
 pub fn resolve_run_query(input: &RunResolutionInput<'_>) -> Result<String, RunResolutionError> {
-    resolve_pod_query(&WatchScopeInput::from(input))
+    resolve_pod_query(input)
 }
 
 /// Resolve only namespace scope (`-A`, explicit `-n`, or kube context default).
@@ -179,7 +182,7 @@ pub fn resolve_run_namespaces(
     input: &RunResolutionInput<'_>,
     context: &ContextSelector,
 ) -> Result<Vec<String>, RunResolutionError> {
-    resolve_namespaces(&WatchScopeInput::from(input), context)
+    resolve_namespaces(input, context)
 }
 
 #[cfg(test)]
@@ -234,68 +237,47 @@ mod tests {
     }
 
     #[test]
-    fn explicit_query_is_preserved() {
-        let ns: [String; 0] = [];
-        let i = input(Some("myapp.*"), None, None, false, &ns);
-        assert_eq!(resolve_run_query(&i).unwrap(), "myapp.*");
+    fn pod_query_resolution_cases() {
+        let empty_ns: [String; 0] = [];
+        let cases: &[(
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+            Result<&str, RunResolutionError>,
+        )] = &[
+            (Some("myapp.*"), None, None, Ok("myapp.*")),
+            (None, Some("app=foo"), None, Ok(".*")),
+            (None, None, Some("metadata.name=foo"), Ok(".*")),
+            (Some("."), Some("app=foo"), None, Ok(".")),
+            (Some("."), None, Some("metadata.name=foo"), Ok(".*")),
+            (None, None, None, Err(RunResolutionError::QueryRequired)),
+        ];
+
+        for (query, selector, field_selector, expect) in cases {
+            let i = input(*query, *selector, *field_selector, false, &empty_ns);
+            match expect {
+                Ok(want) => assert_eq!(resolve_run_query(&i).unwrap(), *want),
+                Err(RunResolutionError::QueryRequired) => assert!(matches!(
+                    resolve_run_query(&i),
+                    Err(RunResolutionError::QueryRequired)
+                )),
+                Err(_) => panic!("unexpected error variant in test table"),
+            }
+        }
     }
 
     #[test]
-    fn label_selector_implies_wildcard_query() {
-        let ns: [String; 0] = [];
-        let i = input(None, Some("app=foo"), None, false, &ns);
-        assert_eq!(resolve_run_query(&i).unwrap(), ".*");
-    }
-
-    #[test]
-    fn field_selector_implies_wildcard_query() {
-        let ns: [String; 0] = [];
-        let i = input(None, None, Some("metadata.name=foo"), false, &ns);
-        assert_eq!(resolve_run_query(&i).unwrap(), ".*");
-    }
-
-    #[test]
-    fn dot_sentinel_with_label_selector_is_preserved_for_runner_compat() {
-        let ns: [String; 0] = [];
-        let i = input(Some("."), Some("app=foo"), None, false, &ns);
-        assert_eq!(resolve_run_query(&i).unwrap(), ".");
-    }
-
-    #[test]
-    fn dot_sentinel_with_field_selector_normalizes_to_wildcard() {
-        let ns: [String; 0] = [];
-        let i = input(Some("."), None, Some("metadata.name=foo"), false, &ns);
-        assert_eq!(resolve_run_query(&i).unwrap(), ".*");
-    }
-
-    #[test]
-    fn missing_query_without_selector_fails() {
-        let ns: [String; 0] = [];
-        let i = input(None, None, None, false, &ns);
-        assert!(matches!(
-            resolve_run_query(&i),
-            Err(RunResolutionError::QueryRequired)
-        ));
-    }
-
-    #[test]
-    fn all_namespaces_yields_empty_list() {
-        let ns: [String; 0] = [];
-        let i = input(Some("q"), None, None, true, &ns);
+    fn namespace_resolution_cases() {
+        let empty_ns: [String; 0] = [];
         let ctx = ContextSelector::default();
-        assert!(resolve_run_namespaces(&i, &ctx).unwrap().is_empty());
-    }
 
-    #[test]
-    fn explicit_namespace_is_deduped() {
+        let i = input(Some("q"), None, None, true, &empty_ns);
+        assert!(resolve_run_namespaces(&i, &ctx).unwrap().is_empty());
+
         let flags = vec!["a,b".to_string(), "a".to_string()];
         let i = input(Some("q"), None, None, false, &flags);
-        let ctx = ContextSelector::default();
         assert_eq!(resolve_run_namespaces(&i, &ctx).unwrap(), vec!["a", "b"]);
-    }
 
-    #[test]
-    fn implicit_namespace_from_kubeconfig() {
         let kube = r#"
 apiVersion: v1
 kind: Config
@@ -315,16 +297,11 @@ users:
     user: {}
 "#;
         let f = write_kubeconfig(kube);
-        let ns: [String; 0] = [];
-        let i = input(Some("q"), None, None, false, &ns);
+        let i = input(Some("q"), None, None, false, &empty_ns);
         let ctx = context_with_kubeconfig(f.path());
         assert_eq!(resolve_run_namespaces(&i, &ctx).unwrap(), vec!["team-ns"]);
-    }
 
-    #[test]
-    fn kubeconfig_read_failure_surfaces_in_resolved_namespaces() {
-        let ns: [String; 0] = [];
-        let i = input(Some("q"), None, None, false, &ns);
+        let i = input(Some("q"), None, None, false, &empty_ns);
         let ctx = ContextSelector {
             kubeconfig_path: Some("/nonexistent/rustern-kubeconfig-test".into()),
             context_name: None,
@@ -418,17 +395,5 @@ users:
         let resolved = resolve_run_input(&i, &ctx).unwrap();
         assert_eq!(resolved.resolved_query(), "q");
         assert_eq!(resolved.resolved_namespaces(), &["ns1".to_string()]);
-    }
-
-    #[test]
-    fn as_watch_scope_resolved_matches_output_fields() {
-        let flags = vec!["ns1".to_string(), "ns2".to_string()];
-        let i = input(Some("deploy/.*"), None, None, false, &flags);
-        let ctx = ContextSelector::default();
-        let resolved = resolve_run_input(&i, &ctx).unwrap();
-        let legacy = resolved.as_watch_scope_resolved();
-        assert_eq!(legacy.query, resolved.resolved_query());
-        assert_eq!(legacy.namespaces, resolved.resolved_namespaces());
-        assert_eq!(legacy.all_namespaces, resolved.all_namespaces());
     }
 }
