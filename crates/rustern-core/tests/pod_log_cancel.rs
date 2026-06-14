@@ -43,7 +43,7 @@ async fn pod_token_cancellation_stops_source() {
 
     let source = PodLogSource::start(
         client,
-        sample_meta("p1"),
+        Arc::new(sample_meta("p1")),
         pod_t.clone(),
         PodLogRequest {
             follow: true,
@@ -81,7 +81,7 @@ async fn root_token_cancels_child_sources() {
 
     let source = PodLogSource::start(
         client,
-        sample_meta("p1"),
+        Arc::new(sample_meta("p1")),
         pod_t,
         PodLogRequest {
             follow: true,

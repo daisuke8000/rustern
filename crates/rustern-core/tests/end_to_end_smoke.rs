@@ -45,7 +45,7 @@ async fn mock_logs_through_pipeline_and_renderer() {
 
     let source = PodLogSource::start(
         client,
-        meta,
+        Arc::new(meta),
         CancellationToken::new(),
         PodLogRequest {
             follow: true,

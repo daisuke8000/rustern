@@ -28,7 +28,7 @@ enum StreamEnd {
 
 struct AttachPodLogParams {
     ctx: Arc<PodWatchCtx>,
-    meta: SourceMeta,
+    meta: Arc<SourceMeta>,
     pod_token: CancellationToken,
     key: SourceKey,
 }
@@ -37,9 +37,9 @@ async fn source_meta_for_key(
     context: &ContextName,
     cache: &PodMetaCache,
     key: &SourceKey,
-) -> SourceMeta {
+) -> Arc<SourceMeta> {
     let snap = cache.lookup(key).await;
-    SourceMeta {
+    Arc::new(SourceMeta {
         context: context.clone(),
         namespace: key.namespace.clone(),
         pod: key.pod.clone(),
@@ -48,7 +48,7 @@ async fn source_meta_for_key(
         node: snap.node,
         labels: Arc::new(snap.labels),
         uid: key.uid.clone(),
-    }
+    })
 }
 
 struct CursorTrackingStream {
@@ -154,7 +154,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
             .ctx
             .attach
             .log_opener
-            .open(p.meta.clone(), p.pod_token.clone(), request)
+            .open(Arc::clone(&p.meta), p.pod_token.clone(), request)
             .await
         {
             Ok(src) => {

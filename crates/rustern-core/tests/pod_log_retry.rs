@@ -46,7 +46,7 @@ async fn retries_until_success() {
 
     let source = PodLogSource::start(
         client,
-        meta,
+        Arc::new(meta),
         CancellationToken::new(),
         PodLogRequest {
             follow: true,

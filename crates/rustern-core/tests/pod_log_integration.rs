@@ -41,7 +41,7 @@ async fn streams_two_lines_from_mock_apiserver() {
 
     let source = PodLogSource::start(
         client,
-        meta,
+        Arc::new(meta),
         CancellationToken::new(),
         PodLogRequest {
             follow: true,
@@ -94,7 +94,7 @@ async fn passes_previous_and_since_time_query_params() {
     let ts: jiff::Timestamp = "2024-03-15T10:30:45Z".parse().unwrap();
     let source = PodLogSource::start(
         client,
-        meta,
+        Arc::new(meta),
         CancellationToken::new(),
         PodLogRequest {
             follow: false,

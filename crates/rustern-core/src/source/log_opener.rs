@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use kube::Client;
 use tokio_util::sync::CancellationToken;
@@ -8,15 +9,12 @@ use super::pod_log::{PodLogRequest, PodLogSource};
 use super::{LogSource, LogSourceError, SourceMeta};
 
 #[cfg(any(test, feature = "bench"))]
-use std::sync::Arc;
-
-#[cfg(any(test, feature = "bench"))]
 use super::BoxedLogStream;
 
 pub(crate) trait LogSourceOpener: Send + Sync {
     fn open(
         &self,
-        meta: SourceMeta,
+        meta: Arc<SourceMeta>,
         token: CancellationToken,
         request: PodLogRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>>;
@@ -35,7 +33,7 @@ impl PodLogSourceOpener {
 impl LogSourceOpener for PodLogSourceOpener {
     fn open(
         &self,
-        meta: SourceMeta,
+        meta: Arc<SourceMeta>,
         token: CancellationToken,
         request: PodLogRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
@@ -87,7 +85,7 @@ impl ScriptLogSourceOpener {
 impl LogSourceOpener for ScriptLogSourceOpener {
     fn open(
         &self,
-        meta: SourceMeta,
+        meta: Arc<SourceMeta>,
         token: CancellationToken,
         _request: PodLogRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
@@ -100,7 +98,6 @@ impl LogSourceOpener for ScriptLogSourceOpener {
             }
         };
         Box::pin(async move {
-            let meta = Arc::new(meta);
             let inner: BoxedLogStream = Box::pin(futures::stream::iter(script.into_iter()));
             Ok(Box::new(ScriptLogSource { meta, token, inner }) as Box<dyn LogSource>)
         })

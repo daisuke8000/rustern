@@ -1,6 +1,8 @@
 //! In-memory per-stream cursor timestamps for `--cursor-reconnect`.
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, TryLockError};
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
@@ -11,6 +13,7 @@ use crate::source::pod_log::PodLogRequest;
 
 pub(crate) const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
 
+const SHARD_COUNT: usize = 16;
 const LOCK_RETRIES: usize = 16;
 
 enum TryCursorMutOutcome {
@@ -19,22 +22,39 @@ enum TryCursorMutOutcome {
     Contended,
 }
 
+fn shard_index(key: &SourceKey) -> usize {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % SHARD_COUNT
+}
+
 /// Last-seen log line timestamp per stream, used to resume follow streams after EOF.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct ReconnectCursorStore {
-    inner: Arc<Mutex<HashMap<SourceKey, DateTime<Utc>>>>,
+    inner: Arc<Vec<Mutex<HashMap<SourceKey, DateTime<Utc>>>>>,
+}
+
+impl Default for ReconnectCursorStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReconnectCursorStore {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(
+                (0..SHARD_COUNT)
+                    .map(|_| Mutex::new(HashMap::new()))
+                    .collect(),
+            ),
         }
     }
 
     pub(crate) async fn get(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
+        let shard = shard_index(key);
         for _ in 0..LOCK_RETRIES {
-            match self.inner.try_lock() {
+            match self.inner[shard].try_lock() {
                 Ok(cursor) => return cursor.get(key).copied(),
                 Err(TryLockError::Poisoned(e)) => {
                     tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping get");
@@ -64,8 +84,9 @@ impl ReconnectCursorStore {
     }
 
     pub(crate) async fn remove(&self, key: &SourceKey) {
+        let shard = shard_index(key);
         for _ in 0..LOCK_RETRIES {
-            match self.inner.try_lock() {
+            match self.inner[shard].try_lock() {
                 Ok(mut cursor) => {
                     cursor.remove(key);
                     return;
@@ -86,8 +107,9 @@ impl ReconnectCursorStore {
         key: &SourceKey,
         mut op: impl FnMut(&mut HashMap<SourceKey, DateTime<Utc>>),
     ) -> TryCursorMutOutcome {
+        let shard = shard_index(key);
         for _ in 0..LOCK_RETRIES {
-            match self.inner.try_lock() {
+            match self.inner[shard].try_lock() {
                 Ok(mut cursor) => {
                     op(&mut cursor);
                     return TryCursorMutOutcome::Success;
@@ -154,6 +176,28 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    fn sample_key(pod: &str, uid: &str) -> SourceKey {
+        SourceKey {
+            context: crate::source::ContextName("ctx".into()),
+            namespace: "ns".into(),
+            pod: pod.into(),
+            container: "c".into(),
+            uid: uid.into(),
+        }
+    }
+
+    fn keys_on_different_shards() -> (SourceKey, SourceKey) {
+        let left = sample_key("pod-a", "uid-a");
+        for i in 0..256 {
+            let mut right = sample_key(&format!("pod-{i}"), &format!("uid-{i}"));
+            right.container = format!("c-{i}");
+            if shard_index(&left) != shard_index(&right) {
+                return (left, right);
+            }
+        }
+        panic!("could not find keys on different shards");
+    }
+
     #[test]
     fn reopen_without_cursor_keeps_initial_tail_and_since() {
         let base = PodLogRequest {
@@ -209,13 +253,7 @@ mod tests {
     #[tokio::test]
     async fn store_records_gets_and_removes_cursor() {
         let store = ReconnectCursorStore::new();
-        let key = SourceKey {
-            context: crate::source::ContextName("ctx".into()),
-            namespace: "ns".into(),
-            pod: "p".into(),
-            container: "c".into(),
-            uid: "u".into(),
-        };
+        let key = sample_key("p", "u");
         let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
 
         assert!(store.get(&key).await.is_none());
@@ -223,5 +261,55 @@ mod tests {
         assert_eq!(store.get(&key).await, Some(ts));
         store.remove(&key).await;
         assert!(store.get(&key).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn different_shards_record_and_get_independently() {
+        let store = ReconnectCursorStore::new();
+        let (key_a, key_b) = keys_on_different_shards();
+        let ts_a = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 1).unwrap();
+        let ts_b = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 2).unwrap();
+
+        let store_a = store.clone();
+        let store_b = store.clone();
+        let key_a_c = key_a.clone();
+        let key_b_c = key_b.clone();
+        let (got_a, got_b) = tokio::join!(
+            async move {
+                store_a.record(&key_a_c, ts_a);
+                store_a.get(&key_a_c).await
+            },
+            async move {
+                store_b.record(&key_b_c, ts_b);
+                store_b.get(&key_b_c).await
+            },
+        );
+
+        assert_eq!(got_a, Some(ts_a));
+        assert_eq!(got_b, Some(ts_b));
+    }
+
+    #[tokio::test]
+    async fn same_shard_concurrent_records_last_write_visible() {
+        let store = ReconnectCursorStore::new();
+        let key = sample_key("shared", "uid-shared");
+        let ts_early = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 1).unwrap();
+        let ts_late = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 9).unwrap();
+
+        let store_a = store.clone();
+        let store_b = store.clone();
+        let key_a = key.clone();
+        let key_b = key.clone();
+        tokio::join!(
+            async move {
+                store_a.record(&key_a, ts_early);
+            },
+            async move {
+                store_b.record(&key_b, ts_late);
+            },
+        );
+
+        let got = store.get(&key).await;
+        assert!(got == Some(ts_early) || got == Some(ts_late));
     }
 }

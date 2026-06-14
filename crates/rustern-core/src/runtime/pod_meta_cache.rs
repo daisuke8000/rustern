@@ -1,6 +1,8 @@
 //! Watch-side cache of per-pod metadata for attach-time [`SourceMeta`] enrichment.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Pod;
@@ -10,25 +12,38 @@ use crate::source::ContextName;
 use crate::source::SourceKey;
 use crate::source::pod_meta::{PodLocator, PodMetaSnapshot, pod_meta_snapshot_from_pod};
 
+const SHARD_COUNT: usize = 16;
+
+fn shard_index(key: &PodLocator) -> usize {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % SHARD_COUNT
+}
+
 /// In-memory pod metadata cache keyed by [`PodLocator`].
 #[derive(Clone)]
 pub(crate) struct PodMetaCache {
-    inner: Arc<RwLock<HashMap<PodLocator, PodMetaSnapshot>>>,
+    inner: Arc<Vec<RwLock<HashMap<PodLocator, PodMetaSnapshot>>>>,
 }
 
 impl PodMetaCache {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            inner: Arc::new(
+                (0..SHARD_COUNT)
+                    .map(|_| RwLock::new(HashMap::new()))
+                    .collect(),
+            ),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn with_entry(locator: PodLocator, snapshot: PodMetaSnapshot) -> Self {
-        let mut map = HashMap::new();
-        map.insert(locator, snapshot);
+        let mut maps: Vec<HashMap<PodLocator, PodMetaSnapshot>> =
+            (0..SHARD_COUNT).map(|_| HashMap::new()).collect();
+        maps[shard_index(&locator)].insert(locator, snapshot);
         Self {
-            inner: Arc::new(RwLock::new(map)),
+            inner: Arc::new(maps.into_iter().map(RwLock::new).collect()),
         }
     }
 
@@ -42,17 +57,21 @@ impl PodMetaCache {
             return;
         };
         let snapshot = pod_meta_snapshot_from_pod(pod);
-        let mut cache = self.inner.write().await;
+        let shard = shard_index(&locator);
+        let mut cache = self.inner[shard].write().await;
         cache.insert(locator, snapshot);
     }
 
     pub(crate) async fn clear(&self) {
-        self.inner.write().await.clear();
+        for shard in self.inner.iter() {
+            shard.write().await.clear();
+        }
     }
 
     pub(crate) async fn prune(&self, keep: &HashSet<PodLocator>) {
-        let mut cache = self.inner.write().await;
-        cache.retain(|loc, _| keep.contains(loc));
+        for shard in self.inner.iter() {
+            shard.write().await.retain(|loc, _| keep.contains(loc));
+        }
     }
 
     pub(crate) async fn remove_pod(&self, context: &ContextName, pod: &Pod) {
@@ -64,13 +83,15 @@ impl PodMetaCache {
             );
             return;
         };
-        let mut cache = self.inner.write().await;
+        let shard = shard_index(&locator);
+        let mut cache = self.inner[shard].write().await;
         cache.remove(&locator);
     }
 
     pub(crate) async fn lookup(&self, key: &SourceKey) -> PodMetaSnapshot {
         let locator = PodLocator::from_source_key(key);
-        let cache = self.inner.read().await;
+        let shard = shard_index(&locator);
+        let cache = self.inner[shard].read().await;
         if let Some(snapshot) = cache.get(&locator) {
             return snapshot.clone();
         }
@@ -103,6 +124,18 @@ mod tests {
                 node_name: Some("worker-3".into()),
                 ..Default::default()
             }),
+            ..Default::default()
+        }
+    }
+
+    fn pod_named(name: &str, uid: &str) -> Pod {
+        Pod {
+            metadata: ObjectMeta {
+                name: Some(name.into()),
+                namespace: Some("ns".into()),
+                uid: Some(uid.into()),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -180,6 +213,41 @@ mod tests {
         };
         assert_ne!(cache.lookup(&active_key).await, PodMetaSnapshot::default());
         assert_eq!(cache.lookup(&stale_key).await, PodMetaSnapshot::default());
+    }
+
+    #[tokio::test]
+    async fn prune_drops_stale_entries_across_shards() {
+        let cache = PodMetaCache::new();
+        let ctx = context();
+        for i in 0..32 {
+            cache
+                .update_from_pod(&ctx, &pod_named(&format!("pod-{i}"), &format!("uid-{i}")))
+                .await;
+        }
+        cache.update_from_pod(&ctx, &test_pod()).await;
+
+        let keep = HashSet::from([PodLocator::try_from_pod(&ctx, &test_pod()).expect("locator")]);
+        cache.prune(&keep).await;
+
+        for i in 0..32 {
+            let key = SourceKey {
+                context: ctx.clone(),
+                namespace: "ns".into(),
+                pod: format!("pod-{i}"),
+                container: "app".into(),
+                uid: format!("uid-{i}"),
+            };
+            assert_eq!(cache.lookup(&key).await, PodMetaSnapshot::default());
+        }
+
+        let active_key = SourceKey {
+            context: ctx,
+            namespace: "ns".into(),
+            pod: "pod-a".into(),
+            container: "app".into(),
+            uid: "uid-1".into(),
+        };
+        assert_ne!(cache.lookup(&active_key).await, PodMetaSnapshot::default());
     }
 
     #[tokio::test]

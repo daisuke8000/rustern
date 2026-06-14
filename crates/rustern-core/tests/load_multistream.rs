@@ -117,7 +117,7 @@ async fn connect_mock_sources(
     with_deadline("connect_mock_sources", CONNECT_LIMIT, async move {
         let mut streams = Vec::with_capacity(pods);
         for p in 0..pods {
-            let meta = SourceMeta {
+            let meta = Arc::new(SourceMeta {
                 context: ContextName("ctx".into()),
                 namespace: "ns".into(),
                 pod: format!("pod-{p}"),
@@ -126,11 +126,11 @@ async fn connect_mock_sources(
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: format!("uid-{p}"),
-            };
+            });
             let client = kube::Client::new(mock.clone(), "default");
             let source = PodLogSource::start(
                 client,
-                meta.clone(),
+                Arc::clone(&meta),
                 token.clone(),
                 PodLogRequest {
                     follow: false,
