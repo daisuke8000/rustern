@@ -1,4 +1,8 @@
 //! In-memory per-stream cursor timestamps for `--cursor-reconnect`.
+//!
+//! Stream attach records the latest line timestamp through an unbounded channel so
+//! log streams never touch [`ReconnectCursorStore`] locks inside `Stream::poll_next`.
+//! A dedicated processor task ([`run_cursor_update_processor`]) applies updates.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -7,6 +11,7 @@ use std::sync::{Arc, Mutex, TryLockError};
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use jiff::Timestamp;
+use tokio::sync::mpsc;
 
 use crate::source::SourceKey;
 use crate::source::pod_log::PodLogRequest;
@@ -16,10 +21,11 @@ pub(crate) const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
 const SHARD_COUNT: usize = 16;
 const LOCK_RETRIES: usize = 16;
 
-enum TryCursorMutOutcome {
-    Success,
-    Poisoned,
-    Contended,
+/// Cursor advance emitted from a log stream; processed asynchronously.
+#[derive(Debug, Clone)]
+pub(crate) struct CursorUpdate {
+    pub(crate) key: SourceKey,
+    pub(crate) timestamp: DateTime<Utc>,
 }
 
 fn shard_index(key: &SourceKey) -> usize {
@@ -68,13 +74,27 @@ impl ReconnectCursorStore {
         None
     }
 
-    pub(crate) fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
+    pub(crate) async fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
         let key = key.clone();
-        match self.try_cursor_mut_sync(&key, |cursor| {
-            cursor.insert(key.clone(), timestamp);
-        }) {
-            TryCursorMutOutcome::Success | TryCursorMutOutcome::Poisoned => return,
-            TryCursorMutOutcome::Contended => {}
+        let shard = shard_index(&key);
+        for _ in 0..LOCK_RETRIES {
+            match self.inner[shard].try_lock() {
+                Ok(mut cursor) => {
+                    cursor.insert(key, timestamp);
+                    return;
+                }
+                Err(TryLockError::Poisoned(e)) => {
+                    tracing::warn!(
+                        key = ?key,
+                        ?timestamp,
+                        error = %e,
+                        "reconnect_cursor lock poisoned, skipping record"
+                    );
+                    return;
+                }
+                Err(TryLockError::WouldBlock) => {}
+            }
+            tokio::task::yield_now().await;
         }
         tracing::warn!(
             key = ?key,
@@ -101,27 +121,14 @@ impl ReconnectCursorStore {
         }
         tracing::warn!(key = ?key, "reconnect_cursor lock contended, skipping remove after retries");
     }
+}
 
-    fn try_cursor_mut_sync(
-        &self,
-        key: &SourceKey,
-        mut op: impl FnMut(&mut HashMap<SourceKey, DateTime<Utc>>),
-    ) -> TryCursorMutOutcome {
-        let shard = shard_index(key);
-        for _ in 0..LOCK_RETRIES {
-            match self.inner[shard].try_lock() {
-                Ok(mut cursor) => {
-                    op(&mut cursor);
-                    return TryCursorMutOutcome::Success;
-                }
-                Err(TryLockError::Poisoned(e)) => {
-                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping record");
-                    return TryCursorMutOutcome::Poisoned;
-                }
-                Err(TryLockError::WouldBlock) => std::thread::yield_now(),
-            }
-        }
-        TryCursorMutOutcome::Contended
+pub(crate) async fn run_cursor_update_processor(
+    mut rx: mpsc::UnboundedReceiver<CursorUpdate>,
+    store: ReconnectCursorStore,
+) {
+    while let Some(update) = rx.recv().await {
+        store.record(&update.key, update.timestamp).await;
     }
 }
 
@@ -257,7 +264,7 @@ mod tests {
         let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
 
         assert!(store.get(&key).await.is_none());
-        store.record(&key, ts);
+        store.record(&key, ts).await;
         assert_eq!(store.get(&key).await, Some(ts));
         store.remove(&key).await;
         assert!(store.get(&key).await.is_none());
@@ -276,11 +283,11 @@ mod tests {
         let key_b_c = key_b.clone();
         let (got_a, got_b) = tokio::join!(
             async move {
-                store_a.record(&key_a_c, ts_a);
+                store_a.record(&key_a_c, ts_a).await;
                 store_a.get(&key_a_c).await
             },
             async move {
-                store_b.record(&key_b_c, ts_b);
+                store_b.record(&key_b_c, ts_b).await;
                 store_b.get(&key_b_c).await
             },
         );
@@ -302,14 +309,43 @@ mod tests {
         let key_b = key.clone();
         tokio::join!(
             async move {
-                store_a.record(&key_a, ts_early);
+                store_a.record(&key_a, ts_early).await;
             },
             async move {
-                store_b.record(&key_b, ts_late);
+                store_b.record(&key_b, ts_late).await;
             },
         );
 
         let got = store.get(&key).await;
         assert!(got == Some(ts_early) || got == Some(ts_late));
+    }
+
+    #[tokio::test]
+    async fn processor_applies_channel_updates_to_store() {
+        let store = ReconnectCursorStore::new();
+        let key = sample_key("p", "u");
+        let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let processor = tokio::spawn(run_cursor_update_processor(rx, store.clone()));
+
+        tx.send(CursorUpdate {
+            key: key.clone(),
+            timestamp: ts,
+        })
+        .expect("send update");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            if store.get(&key).await == Some(ts) {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("cursor update not applied within deadline");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        drop(tx);
+        processor.await.expect("processor task");
     }
 }

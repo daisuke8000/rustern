@@ -12,7 +12,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
-use super::cursor_store::ReconnectCursorStore;
+use super::cursor_store::{CursorUpdate, ReconnectCursorStore, run_cursor_update_processor};
 use super::forward::{
     LossyMetrics, MuxMetrics, RunStats, build_log_request_semaphore, forward_to_render,
 };
@@ -183,6 +183,13 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
         cfg.root_token.clone(),
     );
 
+    let reconnect_cursor = ReconnectCursorStore::new();
+    let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel::<CursorUpdate>();
+    let cursor_h = tokio::spawn(run_cursor_update_processor(
+        cursor_update_rx,
+        reconnect_cursor.clone(),
+    ));
+
     let watch_ctx = Arc::new(PodWatchCtx {
         admission,
         attach: AttachDeps {
@@ -190,7 +197,8 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
             root_child: cfg.root_token.clone(),
             pod_log: cfg.pod_log.clone(),
             cursor_reconnect: cfg.cursor_reconnect,
-            reconnect_cursor: ReconnectCursorStore::new(),
+            reconnect_cursor,
+            cursor_update_tx,
             sem,
             mux_tx: mux_tx.clone(),
             follow_limit_notifier,
@@ -227,6 +235,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     watch_h.abort();
     h_mux.abort();
     pipe_h.abort();
+    cursor_h.abort();
 
     if limit_hit {
         return Err(RunError::Other(
