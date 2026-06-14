@@ -4,14 +4,15 @@
 //! That cap is independent of mux/forward backpressure policies, which govern
 //! behaviour when internal channels are full after a stream is running.
 
+use chrono::{DateTime, Utc};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::cursor_store::{ReconnectCursorStore, pod_log_request_for_reopen};
+use super::cursor_store::{CursorUpdate, ReconnectCursorStore, pod_log_request_for_reopen};
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_ctx::PodWatchCtx;
@@ -19,10 +20,11 @@ use crate::source::ContextName;
 use crate::source::{BoxedLogStream, LogEvent, LogSourceError, SourceKey, SourceKind, SourceMeta};
 
 const MAX_REOPEN_START_RETRIES: u32 = 5;
+const CURSOR_FLUSH_RETRIES: usize = 16;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum StreamEnd {
-    Eof,
+    Eof { last_line_ts: Option<DateTime<Utc>> },
     Cancelled,
 }
 
@@ -51,11 +53,15 @@ async fn source_meta_for_key(
     })
 }
 
+/// Wraps a pod log stream and forwards cursor advances through an unbounded channel.
+///
+/// Timestamp recording never runs inside `poll_next`; see [`super::cursor_store`].
 struct CursorTrackingStream {
     inner: BoxedLogStream,
     key: SourceKey,
     pod_token: CancellationToken,
-    reconnect_cursor: ReconnectCursorStore,
+    cursor_tx: mpsc::UnboundedSender<CursorUpdate>,
+    last_line_ts: Option<DateTime<Utc>>,
     done_tx: Option<oneshot::Sender<StreamEnd>>,
 }
 
@@ -64,14 +70,15 @@ impl CursorTrackingStream {
         inner: BoxedLogStream,
         key: SourceKey,
         pod_token: CancellationToken,
-        reconnect_cursor: ReconnectCursorStore,
+        cursor_tx: mpsc::UnboundedSender<CursorUpdate>,
         done_tx: oneshot::Sender<StreamEnd>,
     ) -> Self {
         Self {
             inner,
             key,
             pod_token,
-            reconnect_cursor,
+            cursor_tx,
+            last_line_ts: None,
             done_tx: Some(done_tx),
         }
     }
@@ -89,7 +96,11 @@ impl futures::Stream for CursorTrackingStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
-                self.reconnect_cursor.record(&self.key, event.timestamp);
+                self.last_line_ts = Some(event.timestamp);
+                let _ = self.cursor_tx.send(CursorUpdate {
+                    key: self.key.clone(),
+                    timestamp: event.timestamp,
+                });
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(Some(item)) => Poll::Ready(Some(item)),
@@ -97,7 +108,9 @@ impl futures::Stream for CursorTrackingStream {
                 let reason = if self.pod_token.is_cancelled() {
                     StreamEnd::Cancelled
                 } else {
-                    StreamEnd::Eof
+                    StreamEnd::Eof {
+                        last_line_ts: self.last_line_ts,
+                    }
                 };
                 self.finish(reason);
                 Poll::Ready(None)
@@ -112,10 +125,34 @@ impl Drop for CursorTrackingStream {
         let reason = if self.pod_token.is_cancelled() {
             StreamEnd::Cancelled
         } else {
-            StreamEnd::Eof
+            StreamEnd::Eof {
+                last_line_ts: self.last_line_ts,
+            }
         };
         self.finish(reason);
     }
+}
+
+async fn wait_cursor_flushed(
+    store: &ReconnectCursorStore,
+    key: &SourceKey,
+    expected: Option<DateTime<Utc>>,
+) {
+    let Some(expected) = expected else {
+        return;
+    };
+    for _ in 0..CURSOR_FLUSH_RETRIES {
+        if store.get(key).await.is_some_and(|got| got >= expected) {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    tracing::warn!(
+        ?key,
+        ?expected,
+        retries = CURSOR_FLUSH_RETRIES,
+        "cursor flush not confirmed before reconnect"
+    );
 }
 
 async fn attach_pod_log_stream(p: AttachPodLogParams) {
@@ -164,7 +201,7 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
                     src.into_stream(),
                     p.key.clone(),
                     p.pod_token.clone(),
-                    p.ctx.attach.reconnect_cursor.clone(),
+                    p.ctx.attach.cursor_update_tx.clone(),
                     done_tx,
                 ));
                 if p.ctx
@@ -181,7 +218,9 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
 
                 let should_reconnect = p.ctx.attach.cursor_reconnect && p.ctx.attach.pod_log.follow;
                 match done_rx.await {
-                    Ok(StreamEnd::Eof) if should_reconnect => {
+                    Ok(StreamEnd::Eof { last_line_ts }) if should_reconnect => {
+                        wait_cursor_flushed(&p.ctx.attach.reconnect_cursor, &p.key, last_line_ts)
+                            .await;
                         reopen = true;
                         continue;
                     }

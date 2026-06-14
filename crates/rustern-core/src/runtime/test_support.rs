@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::cursor_store::ReconnectCursorStore;
+use super::cursor_store::{ReconnectCursorStore, run_cursor_update_processor};
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_admission::WatchAdmissionPolicy;
@@ -25,6 +25,18 @@ type MockHandle =
 struct TestKeepalive {
     _mock_handle: MockHandle,
     _mux_drain: Option<tokio::task::JoinHandle<()>>,
+    _cursor_processor: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for TestKeepalive {
+    fn drop(&mut self) {
+        if let Some(h) = self._cursor_processor.take() {
+            h.abort();
+        }
+        if let Some(h) = self._mux_drain.take() {
+            h.abort();
+        }
+    }
 }
 
 /// Built watch context plus handles that must outlive the test.
@@ -103,6 +115,12 @@ impl TestOrchestratorBuilder {
             http::Request<kube::client::Body>,
             http::Response<kube::client::Body>,
         >();
+        let reconnect_cursor = ReconnectCursorStore::new();
+        let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel();
+        let cursor_processor = tokio::spawn(run_cursor_update_processor(
+            cursor_update_rx,
+            reconnect_cursor.clone(),
+        ));
         let ctx = PodWatchCtx {
             admission: WatchAdmissionPolicy::try_new(
                 self.context_name,
@@ -128,7 +146,8 @@ impl TestOrchestratorBuilder {
                 root_child: CancellationToken::new(),
                 pod_log: self.pod_log,
                 cursor_reconnect: self.cursor_reconnect,
-                reconnect_cursor: ReconnectCursorStore::new(),
+                reconnect_cursor,
+                cursor_update_tx,
                 sem: Arc::new(Semaphore::new(self.sem_permits)),
                 follow_limit_notifier: None,
                 pod_meta: PodMetaCache::new(),
@@ -139,6 +158,7 @@ impl TestOrchestratorBuilder {
             _keepalive: TestKeepalive {
                 _mock_handle: mock_handle,
                 _mux_drain: mux_drain,
+                _cursor_processor: Some(cursor_processor),
             },
         }
     }
