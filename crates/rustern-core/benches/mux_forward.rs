@@ -323,7 +323,8 @@ fn bench_mux_tiered_policy(c: &mut Criterion) {
 
                         match policy {
                             BackpressurePolicy::Blocking => {
-                                shutdown_mux_after_batch(mux_tx, mux_h, raw_rx, BATCH as usize).await
+                                shutdown_mux_after_batch(mux_tx, mux_h, raw_rx, BATCH as usize)
+                                    .await
                             }
                             BackpressurePolicy::Lossy => {
                                 shutdown_mux_after_batch_lossy(mux_tx, mux_h, raw_rx).await
