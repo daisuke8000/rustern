@@ -97,6 +97,8 @@ impl RunResolutionOutput {
 pub enum RunResolutionError {
     #[error("pod query (QUERY) is required unless `-l` or `--field-selector` is set")]
     QueryRequired,
+    #[error("namespace flag value must not be empty")]
+    InvalidNamespaceFlags,
     #[error(transparent)]
     Context(#[from] ContextError),
 }
@@ -150,6 +152,9 @@ fn resolve_namespaces(
     let explicit = deduped_explicit_namespaces(input.namespace_flags);
     if !explicit.is_empty() {
         return Ok(explicit);
+    }
+    if !input.namespace_flags.is_empty() {
+        return Err(RunResolutionError::InvalidNamespaceFlags);
     }
     let kubeconfig = resolve_kubeconfig(context)?;
     let ns = default_namespace(&kubeconfig, context)?;
@@ -307,6 +312,23 @@ users:
             context_name: None,
         };
         assert!(resolve_run_namespaces(&i, &ctx).is_err());
+    }
+
+    #[test]
+    fn explicit_empty_namespace_flags_return_invalid_namespace_flags() {
+        let ctx = ContextSelector::default();
+        for flags in [
+            vec!["".to_string()],
+            vec![",".to_string()],
+            vec!["  ".to_string()],
+            vec!["".to_string(), "  ".to_string()],
+        ] {
+            let i = input(Some("q"), None, None, false, &flags);
+            assert!(matches!(
+                resolve_run_namespaces(&i, &ctx),
+                Err(RunResolutionError::InvalidNamespaceFlags)
+            ));
+        }
     }
 
     #[test]
