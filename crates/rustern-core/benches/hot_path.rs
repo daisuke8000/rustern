@@ -120,6 +120,34 @@ fn bench_json_pipeline(c: &mut Criterion) {
             black_box(out);
         });
     });
+
+    let skip_spec = PipelineSpecBuilder::new().build(ExitWatchState::new(CancellationToken::new()));
+    let full_spec = PipelineSpecBuilder::new()
+        .with_level_key(Some("level".into()))
+        .with_jq(Some((jq.clone(), QueryMode::Filter)))
+        .build(ExitWatchState::new(CancellationToken::new()));
+
+    for (name, spec) in [("skip_annotate", skip_spec), ("needs_annotate", full_spec)] {
+        group.bench_with_input(
+            BenchmarkId::new("pipeline_spec", name),
+            &batch,
+            |b, batch| {
+                b.iter(|| {
+                    let events = batch.clone();
+                    let spec = spec.clone();
+                    let out = rt.block_on(async move {
+                        spec.apply(stream::iter(
+                            events.into_iter().map(Ok::<_, LogSourceError>),
+                        ))
+                        .collect::<Vec<_>>()
+                        .await
+                    });
+                    black_box(out);
+                });
+            },
+        );
+    }
+
     group.finish();
 }
 

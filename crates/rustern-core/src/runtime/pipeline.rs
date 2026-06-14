@@ -25,6 +25,14 @@ pub struct PipelineStages {
     pub(crate) exit_on: Arc<[Regex]>,
     pub(crate) exit_on_level: Option<ExitOnLevel>,
     pub(crate) exit_watch: ExitWatchState,
+    pub(crate) needs_json_annotation: bool,
+}
+
+pub(crate) fn needs_json_annotation(
+    jq: &Option<(CompiledFilter, QueryMode)>,
+    level_key: &Option<String>,
+) -> bool {
+    jq.is_some() || level_key.is_some()
 }
 
 #[doc(hidden)]
@@ -45,6 +53,7 @@ where
         exit_on,
         exit_on_level,
         exit_watch,
+        needs_json_annotation,
     } = stages;
 
     let order =
@@ -72,7 +81,9 @@ where
         s = Box::pin(exit_watch_message(s, exit_on, exit_watch.clone()));
     }
 
-    s = Box::pin(json_annotate(s));
+    if needs_json_annotation {
+        s = Box::pin(json_annotate(s));
+    }
     s = Box::pin(level_classify(s, level_key));
 
     if let Some(min_level) = exit_on_level {
@@ -268,5 +279,33 @@ mod tests {
             out[0].as_ref().unwrap().message.contains("visible"),
             "include matches jq-replaced message text"
         );
+    }
+
+    #[tokio::test]
+    async fn skips_json_annotate_without_jq_or_level_key() {
+        let raw = r#"{"level":"error","msg":"boom"}"#;
+        let spec = PipelineSpecBuilder::new().build(ExitWatchState::new(CancellationToken::new()));
+        let s = futures::stream::iter(vec![Ok(ev(raw))]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert!(
+            out[0].as_ref().unwrap().structured.is_none(),
+            "json annotate should be skipped when jq and level_key are unset"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_annotate_runs_when_level_key_set() {
+        use crate::source::LogLevel;
+        let raw = r#"{"level":"error","msg":"boom"}"#;
+        let spec = PipelineSpecBuilder::new()
+            .with_level_key(Some("level".into()))
+            .build(ExitWatchState::new(CancellationToken::new()));
+        let s = futures::stream::iter(vec![Ok(ev(raw))]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert!(out[0].as_ref().unwrap().structured.is_some());
+        assert!(matches!(
+            out[0].as_ref().unwrap().level,
+            Some(LogLevel::Error)
+        ));
     }
 }
