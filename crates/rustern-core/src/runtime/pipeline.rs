@@ -1,5 +1,7 @@
 //! `run` only: apply pipeline stages to a raw `LogEvent` stream.
 
+use std::sync::Arc;
+
 use futures::stream::{BoxStream, Stream};
 use regex::Regex;
 
@@ -14,13 +16,13 @@ use crate::source::{LogEvent, LogSourceError};
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct PipelineStages {
-    pub(crate) includes: Vec<Regex>,
-    pub(crate) excludes: Vec<Regex>,
+    pub(crate) includes: Arc<[Regex]>,
+    pub(crate) excludes: Arc<[Regex]>,
     pub(crate) filter_on: FilterOn,
     pub(crate) jq: Option<(CompiledFilter, QueryMode)>,
     pub(crate) level_key: Option<String>,
     pub(crate) color_assign: ColorAssignOpts,
-    pub(crate) exit_on: Vec<Regex>,
+    pub(crate) exit_on: Arc<[Regex]>,
     pub(crate) exit_on_level: Option<ExitOnLevel>,
     pub(crate) exit_watch: ExitWatchState,
 }
@@ -51,11 +53,19 @@ where
     let mut s: BoxStream<'static, Result<LogEvent, LogSourceError>> = Box::pin(stream);
 
     if order.exit_on_message_before_filters {
-        s = Box::pin(exit_watch_message(s, exit_on.clone(), exit_watch.clone()));
+        s = Box::pin(exit_watch_message(
+            s,
+            Arc::clone(&exit_on),
+            exit_watch.clone(),
+        ));
     }
 
     if order.include_before_container {
-        s = Box::pin(include_exclude(s, includes.clone(), excludes.clone()));
+        s = Box::pin(include_exclude(
+            s,
+            Arc::clone(&includes),
+            Arc::clone(&excludes),
+        ));
     }
 
     if !order.exit_on_message_before_filters && !exit_on.is_empty() {
@@ -70,7 +80,11 @@ where
     }
 
     if order.include_after_classify_before_transform {
-        s = Box::pin(include_exclude(s, includes.clone(), excludes.clone()));
+        s = Box::pin(include_exclude(
+            s,
+            Arc::clone(&includes),
+            Arc::clone(&excludes),
+        ));
     }
 
     s = if let Some((f, mode)) = jq {

@@ -7,12 +7,15 @@ use regex::Regex;
 use rustern_core::format_display::{TimestampStyle, TimestampZone};
 use rustern_core::parse_log_line;
 use rustern_core::pipeline::{
-    QueryMode, include_exclude, jq_evaluate, json_annotate, level_classify, validate_filter,
+    ColorAssignOpts, ExitWatchState, QueryMode, include_exclude, jq_evaluate, json_annotate,
+    level_classify, validate_filter,
 };
 use rustern_core::render::LineFormatter;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
+use rustern_core::runtime::PipelineSpecBuilder;
 use rustern_core::source::{ContextName, Labels, LogEvent, LogSourceError, SourceKind, SourceMeta};
+use tokio_util::sync::CancellationToken;
 
 const BATCH: u64 = 1_000;
 
@@ -71,14 +74,14 @@ fn bench_include_exclude(c: &mut Criterion) {
         ("json_4k", json_message_4k()),
     ] {
         let batch = event_batch(&msg);
-        let includes = vec![Regex::new("error|warn|GET").unwrap()];
-        let excludes = vec![Regex::new("healthz").unwrap()];
+        let includes: Arc<[Regex]> = vec![Regex::new("error|warn|GET").unwrap()].into();
+        let excludes: Arc<[Regex]> = vec![Regex::new("healthz").unwrap()].into();
 
         group.bench_with_input(BenchmarkId::new("filter", name), &batch, |b, batch| {
             b.iter(|| {
                 let events = batch.clone();
-                let includes = includes.clone();
-                let excludes = excludes.clone();
+                let includes = Arc::clone(&includes);
+                let excludes = Arc::clone(&excludes);
                 let out = rt.block_on(async move {
                     include_exclude(
                         stream::iter(events.into_iter().map(Ok::<_, LogSourceError>)),
@@ -165,6 +168,60 @@ fn bench_highlight_formatter(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_pipeline_spec_apply(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut group = c.benchmark_group("pipeline_spec_apply");
+    group.throughput(Throughput::Elements(BATCH));
+
+    let msg = plain_message_256();
+    let batch = event_batch(&msg);
+
+    let cases: Vec<(&str, _)> = vec![
+        (
+            "minimal",
+            PipelineSpecBuilder::new().build(ExitWatchState::new(CancellationToken::new())),
+        ),
+        (
+            "filtered",
+            PipelineSpecBuilder::new()
+                .with_includes(vec![Regex::new("GET|POST").unwrap()])
+                .with_excludes(vec![Regex::new("healthz").unwrap()])
+                .build(ExitWatchState::new(CancellationToken::new())),
+        ),
+        (
+            "full",
+            PipelineSpecBuilder::new()
+                .with_includes(vec![Regex::new("GET|error").unwrap()])
+                .with_excludes(vec![Regex::new("healthz").unwrap()])
+                .with_level_key(Some("level".into()))
+                .with_color_assign(ColorAssignOpts {
+                    pod_colors: true,
+                    container_colors: true,
+                    diff_container: true,
+                })
+                .build(ExitWatchState::new(CancellationToken::new())),
+        ),
+    ];
+
+    for (name, spec) in cases {
+        group.bench_with_input(BenchmarkId::new("apply", name), &batch, |b, batch| {
+            b.iter(|| {
+                let events = batch.clone();
+                let spec = spec.clone();
+                let out = rt.block_on(async move {
+                    spec.apply(stream::iter(
+                        events.into_iter().map(Ok::<_, LogSourceError>),
+                    ))
+                    .collect::<Vec<_>>()
+                    .await
+                });
+                black_box(out);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_parse_log_line(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse_log_line");
 
@@ -186,6 +243,7 @@ criterion_group!(
     bench_json_pipeline,
     bench_default_formatter,
     bench_highlight_formatter,
+    bench_pipeline_spec_apply,
     bench_parse_log_line,
 );
 criterion_main!(benches);

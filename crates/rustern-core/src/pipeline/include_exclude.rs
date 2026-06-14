@@ -11,13 +11,15 @@ pub enum FilterOn {
     Original,
 }
 
-pub fn include_exclude<S>(
+pub fn include_exclude<S, I, E>(
     inner: S,
-    includes: Vec<Regex>,
-    excludes: Vec<Regex>,
+    includes: I,
+    excludes: E,
 ) -> impl Stream<Item = Result<LogEvent, LogSourceError>>
 where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
+    I: Into<Arc<[Regex]>>,
+    E: Into<Arc<[Regex]>>,
 {
     let includes: Arc<[Regex]> = includes.into();
     let excludes: Arc<[Regex]> = excludes.into();

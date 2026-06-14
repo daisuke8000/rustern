@@ -83,17 +83,19 @@ impl ExitWatchState {
     }
 }
 
-pub fn exit_watch_message<S>(
+pub fn exit_watch_message<S, P>(
     inner: S,
-    patterns: Vec<Regex>,
+    patterns: P,
     state: ExitWatchState,
 ) -> impl Stream<Item = Result<LogEvent, LogSourceError>>
 where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
+    P: Into<Arc<[Regex]>>,
 {
+    let patterns: Arc<[Regex]> = patterns.into();
     inner.then(move |r| {
         let state = state.clone();
-        let patterns = patterns.clone();
+        let patterns = Arc::clone(&patterns);
         async move {
             if let Ok(ref ev) = r
                 && patterns.iter().any(|re| re.is_match(ev.message.as_ref()))
