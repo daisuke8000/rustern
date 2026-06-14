@@ -213,4 +213,33 @@ mod tests {
         };
         assert_eq!(fwd.render_channel_capacity(), 1);
     }
+
+    #[test]
+    fn backpressure_policy_from_lossy_maps_both_branches() {
+        assert_eq!(
+            BackpressurePolicy::from_lossy(false),
+            BackpressurePolicy::Blocking
+        );
+        assert_eq!(
+            BackpressurePolicy::from_lossy(true),
+            BackpressurePolicy::Lossy
+        );
+    }
+
+    #[test]
+    fn resolved_mux_policy_returns_configured_policy() {
+        let blocking = RuntimeFwdConfig {
+            buffer_size: 1,
+            lossy: true,
+            mux_policy: BackpressurePolicy::Blocking,
+            stats: None,
+            max_log_requests: 1,
+        };
+        let lossy = RuntimeFwdConfig {
+            mux_policy: BackpressurePolicy::Lossy,
+            ..blocking.clone()
+        };
+        assert_eq!(blocking.resolved_mux_policy(), BackpressurePolicy::Blocking);
+        assert_eq!(lossy.resolved_mux_policy(), BackpressurePolicy::Lossy);
+    }
 }
