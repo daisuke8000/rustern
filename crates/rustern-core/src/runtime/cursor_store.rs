@@ -7,11 +7,12 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use jiff::Timestamp;
-use tokio::sync::mpsc;
+use tokio::sync::{RwLock, mpsc};
 
 use crate::source::SourceKey;
 use crate::source::pod_log::PodLogRequest;
@@ -19,13 +20,37 @@ use crate::source::pod_log::PodLogRequest;
 pub(crate) const CURSOR_RECONNECT_OVERLAP: TimeDelta = TimeDelta::seconds(1);
 
 const SHARD_COUNT: usize = 16;
-const LOCK_RETRIES: usize = 16;
 
 /// Cursor advance emitted from a log stream; processed asynchronously.
 #[derive(Debug, Clone)]
 pub(crate) struct CursorUpdate {
     pub(crate) key: SourceKey,
     pub(crate) timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct CursorStoreStats {
+    cursor_updates: AtomicU64,
+    cursor_gets: AtomicU64,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl CursorStoreStats {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            cursor_updates: AtomicU64::new(0),
+            cursor_gets: AtomicU64::new(0),
+        })
+    }
+
+    pub(crate) fn cursor_updates(&self) -> u64 {
+        self.cursor_updates.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn cursor_gets(&self) -> u64 {
+        self.cursor_gets.load(Ordering::Relaxed)
+    }
 }
 
 fn shard_index(key: &SourceKey) -> usize {
@@ -37,7 +62,8 @@ fn shard_index(key: &SourceKey) -> usize {
 /// Last-seen log line timestamp per stream, used to resume follow streams after EOF.
 #[derive(Clone)]
 pub(crate) struct ReconnectCursorStore {
-    inner: Arc<Vec<Mutex<HashMap<SourceKey, DateTime<Utc>>>>>,
+    inner: Arc<Vec<RwLock<HashMap<SourceKey, DateTime<Utc>>>>>,
+    stats: Option<Arc<CursorStoreStats>>,
 }
 
 impl Default for ReconnectCursorStore {
@@ -51,75 +77,45 @@ impl ReconnectCursorStore {
         Self {
             inner: Arc::new(
                 (0..SHARD_COUNT)
-                    .map(|_| Mutex::new(HashMap::new()))
+                    .map(|_| RwLock::new(HashMap::new()))
                     .collect(),
             ),
+            stats: None,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn new_with_stats(stats: Arc<CursorStoreStats>) -> Self {
+        Self {
+            inner: Arc::new(
+                (0..SHARD_COUNT)
+                    .map(|_| RwLock::new(HashMap::new()))
+                    .collect(),
+            ),
+            stats: Some(stats),
         }
     }
 
     pub(crate) async fn get(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
-        let shard = shard_index(key);
-        for _ in 0..LOCK_RETRIES {
-            match self.inner[shard].try_lock() {
-                Ok(cursor) => return cursor.get(key).copied(),
-                Err(TryLockError::Poisoned(e)) => {
-                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping get");
-                    return None;
-                }
-                Err(TryLockError::WouldBlock) => {}
-            }
-            tokio::task::yield_now().await;
+        if let Some(stats) = &self.stats {
+            stats.cursor_gets.fetch_add(1, Ordering::Relaxed);
         }
-        tracing::warn!(key = ?key, "reconnect_cursor lock contended, skipping get after retries");
-        None
+        let shard = shard_index(key);
+        self.inner[shard].read().await.get(key).copied()
     }
 
     pub(crate) async fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
+        if let Some(stats) = &self.stats {
+            stats.cursor_updates.fetch_add(1, Ordering::Relaxed);
+        }
         let key = key.clone();
         let shard = shard_index(&key);
-        for _ in 0..LOCK_RETRIES {
-            match self.inner[shard].try_lock() {
-                Ok(mut cursor) => {
-                    cursor.insert(key, timestamp);
-                    return;
-                }
-                Err(TryLockError::Poisoned(e)) => {
-                    tracing::warn!(
-                        key = ?key,
-                        ?timestamp,
-                        error = %e,
-                        "reconnect_cursor lock poisoned, skipping record"
-                    );
-                    return;
-                }
-                Err(TryLockError::WouldBlock) => {}
-            }
-            tokio::task::yield_now().await;
-        }
-        tracing::warn!(
-            key = ?key,
-            ?timestamp,
-            "reconnect_cursor lock contended, skipping record after retries"
-        );
+        self.inner[shard].write().await.insert(key, timestamp);
     }
 
     pub(crate) async fn remove(&self, key: &SourceKey) {
         let shard = shard_index(key);
-        for _ in 0..LOCK_RETRIES {
-            match self.inner[shard].try_lock() {
-                Ok(mut cursor) => {
-                    cursor.remove(key);
-                    return;
-                }
-                Err(TryLockError::Poisoned(e)) => {
-                    tracing::warn!(key = ?key, error = %e, "reconnect_cursor lock poisoned, skipping remove");
-                    return;
-                }
-                Err(TryLockError::WouldBlock) => {}
-            }
-            tokio::task::yield_now().await;
-        }
-        tracing::warn!(key = ?key, "reconnect_cursor lock contended, skipping remove after retries");
+        self.inner[shard].write().await.remove(key);
     }
 }
 
@@ -203,6 +199,27 @@ mod tests {
             }
         }
         panic!("could not find keys on different shards");
+    }
+
+    fn keys_on_same_shard(count: usize) -> Vec<SourceKey> {
+        assert!(count > 0, "count must be positive");
+        let anchor = sample_key("shard-anchor", "uid-anchor");
+        let target_shard = shard_index(&anchor);
+        let mut keys = Vec::with_capacity(count);
+        for i in 0.. {
+            let mut key = sample_key(&format!("pod-{i}"), &format!("uid-{i}"));
+            key.container = format!("c-{i}");
+            if shard_index(&key) == target_shard {
+                keys.push(key);
+                if keys.len() == count {
+                    return keys;
+                }
+            }
+            if i > 4096 {
+                panic!("could not collect {count} keys on same shard");
+            }
+        }
+        unreachable!()
     }
 
     #[test]
@@ -347,5 +364,81 @@ mod tests {
 
         drop(tx);
         processor.await.expect("processor task");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn same_shard_high_concurrency_records_all_keys() {
+        const TASK_COUNT: usize = 64;
+        let store = ReconnectCursorStore::new();
+        let keys = keys_on_same_shard(TASK_COUNT);
+        let base_ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 0).unwrap();
+
+        let mut join_set = tokio::task::JoinSet::new();
+        for (i, key) in keys.iter().cloned().enumerate() {
+            let store = store.clone();
+            let ts = base_ts + chrono::Duration::milliseconds(i as i64);
+            join_set.spawn(async move {
+                store.record(&key, ts).await;
+                (key, ts)
+            });
+        }
+
+        let mut expected: HashMap<SourceKey, DateTime<Utc>> = HashMap::new();
+        while let Some(result) = join_set.join_next().await {
+            let (key, ts) = result.expect("record task");
+            expected.insert(key, ts);
+        }
+
+        for (key, ts) in expected {
+            assert_eq!(store.get(&key).await, Some(ts));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn processor_applies_many_same_shard_updates() {
+        const UPDATE_COUNT: usize = 200;
+        let store = ReconnectCursorStore::new();
+        let keys = keys_on_same_shard(UPDATE_COUNT);
+        let base_ts = Utc.with_ymd_and_hms(2026, 4, 28, 9, 0, 0).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let processor = tokio::spawn(run_cursor_update_processor(rx, store.clone()));
+
+        let expected: Vec<(SourceKey, DateTime<Utc>)> = keys
+            .into_iter()
+            .enumerate()
+            .map(|(i, key)| {
+                let ts = base_ts + chrono::Duration::milliseconds(i as i64);
+                (key, ts)
+            })
+            .collect();
+
+        for (key, ts) in &expected {
+            tx.send(CursorUpdate {
+                key: key.clone(),
+                timestamp: *ts,
+            })
+            .expect("send update");
+        }
+        drop(tx);
+        processor.await.expect("processor task");
+
+        for (key, ts) in expected {
+            assert_eq!(store.get(&key).await, Some(ts));
+        }
+    }
+
+    #[tokio::test]
+    async fn stats_count_updates_and_gets() {
+        let stats = CursorStoreStats::new();
+        let store = ReconnectCursorStore::new_with_stats(stats.clone());
+        let key = sample_key("p", "u");
+        let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
+
+        store.record(&key, ts).await;
+        store.get(&key).await;
+        store.get(&key).await;
+
+        assert_eq!(stats.cursor_updates(), 1);
+        assert_eq!(stats.cursor_gets(), 2);
     }
 }
