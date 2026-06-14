@@ -59,6 +59,56 @@ mod tests {
         let cli = Cli::try_parse_from(["rstn", "-n", "default", "-l", "app=foo"]).unwrap();
         let out = resolved_run(&cli).unwrap();
         assert_eq!(out.resolved_query(), ".*");
-        assert!(out.validation.implicit_query_from_selector);
+        assert!(out.validation().implicit_query_from_selector);
+    }
+
+    #[test]
+    fn mapper_forwards_node_without_affecting_resolution() {
+        let cli = Cli::try_parse_from(["rstn", "-n", "ns1", "--node", "worker-1", "q"]).unwrap();
+        let input = run_resolution_input(&cli);
+        assert_eq!(input.node, Some("worker-1"));
+        let out = resolved_run(&cli).unwrap();
+        assert_eq!(out.resolved_query(), "q");
+        assert_eq!(out.resolved_namespaces(), &["ns1".to_string()]);
+    }
+
+    #[test]
+    fn validate_uses_kubecontext_namespace_when_unspecified() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let kube = r#"
+apiVersion: v1
+kind: Config
+current-context: ctx
+contexts:
+  - name: ctx
+    context:
+      cluster: c
+      user: u
+      namespace: team-ns
+clusters:
+  - name: c
+    cluster:
+      server: https://localhost
+users:
+  - name: u
+    user: {}
+"#;
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(kube.as_bytes()).unwrap();
+        let cli = Cli::try_parse_from([
+            "rstn",
+            "--kubeconfig",
+            f.path().to_str().unwrap(),
+            "-l",
+            "app=foo",
+        ])
+        .unwrap();
+        cli.validate().unwrap();
+        assert_eq!(
+            resolved_namespaces(&cli).unwrap(),
+            vec!["team-ns".to_string()]
+        );
     }
 }

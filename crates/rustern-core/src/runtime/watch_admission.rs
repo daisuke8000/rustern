@@ -1,6 +1,6 @@
 //! Event-time pod and container admission for the watch reconcile loop.
 //!
-//! - **Plan time** ([`crate::discovery::pod_list::PodWatchPlan`], [`crate::discovery::watch_scope`]):
+//! - **Plan time** ([`crate::discovery::pod_list::PodWatchPlan`], [`crate::discovery::run_resolution`]):
 //!   resolves CLI query, namespaces, label/field selectors, and API list/watch parameters.
 //! - **Event time** (this module): decides which watched [`Pod`] objects and container
 //!   [`SourceKey`] streams are admitted when watch events arrive.
