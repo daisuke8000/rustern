@@ -376,9 +376,11 @@ async fn run_mux_lossy_load(raw_buffer: usize) -> u64 {
         mux_metrics.clone(),
     );
 
-    // Hold the raw consumer so the mux → pipeline channel stays full (tier 1 backpressure).
-    let _hold_raw = tokio::spawn(async move {
-        let _ = raw_rx;
+    // Hold the raw consumer through the observation window so the channel stays Full.
+    let (release_raw_tx, release_raw_rx) = oneshot::channel();
+    let hold_raw = tokio::spawn(async move {
+        let _guard = raw_rx;
+        let _ = release_raw_rx.await;
     });
 
     for (key, stream) in streams {
@@ -387,6 +389,8 @@ async fn run_mux_lossy_load(raw_buffer: usize) -> u64 {
 
     tokio::time::sleep(LOSSY_OBSERVE).await;
 
+    let _ = release_raw_tx.send(());
+    join_with_deadline("hold_raw", hold_raw).await;
     drop(mux_tx);
     token.cancel();
     join_with_deadline("mux", mux_h).await;

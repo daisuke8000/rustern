@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
@@ -115,6 +116,30 @@ async fn shutdown_mux_after_batch(
     drop(mux_tx);
     mux_h.await.expect("mux task");
     while raw_rx.recv().await.is_some() {}
+    received
+}
+
+async fn shutdown_mux_after_batch_lossy(
+    mux_tx: mpsc::Sender<MuxCmd>,
+    mux_h: tokio::task::JoinHandle<()>,
+    mut raw_rx: mpsc::Receiver<Result<LogEvent, rustern_core::source::LogSourceError>>,
+) -> usize {
+    drop(mux_tx);
+    tokio::time::timeout(Duration::from_secs(5), mux_h)
+        .await
+        .expect("mux task timed out")
+        .expect("mux task");
+    let mut received = 0usize;
+    loop {
+        match tokio::time::timeout(Duration::from_millis(10), raw_rx.recv()).await {
+            Ok(Some(row)) => {
+                let _ = black_box(row);
+                received += 1;
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
     received
 }
 
@@ -296,7 +321,14 @@ fn bench_mux_tiered_policy(c: &mut Criterion) {
                             .await
                             .expect("mux add");
 
-                        shutdown_mux_after_batch(mux_tx, mux_h, raw_rx, BATCH as usize).await
+                        match policy {
+                            BackpressurePolicy::Blocking => {
+                                shutdown_mux_after_batch(mux_tx, mux_h, raw_rx, BATCH as usize).await
+                            }
+                            BackpressurePolicy::Lossy => {
+                                shutdown_mux_after_batch_lossy(mux_tx, mux_h, raw_rx).await
+                            }
+                        }
                     });
                     if policy == BackpressurePolicy::Blocking {
                         assert_eq!(count, BATCH as usize);
