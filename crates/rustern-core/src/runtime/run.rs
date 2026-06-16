@@ -218,9 +218,10 @@ pub async fn run_with_client(
     let root_w = cfg.root_token.clone();
     let mux_tx_w = mux_tx.clone();
     drop(mux_tx);
-    let watch_h = spawn_watch_task(w, root_w, mux_tx_w, watch_ctx);
+    let mut watch_h = spawn_watch_task(w, root_w, mux_tx_w, watch_ctx);
 
     let mut limit_hit = false;
+    let mut pipe_join_err = None;
     match follow_lim.take() {
         Some((_, mut lr)) => {
             tokio::select! {
@@ -237,7 +238,9 @@ pub async fn run_with_client(
         None => {
             tokio::select! {
                 r = &mut pipe_h => {
-                    let _ = r;
+                    if let Err(e) = r {
+                        pipe_join_err = Some(e);
+                    }
                     cfg.root_token.cancel();
                 }
                 _ = cfg.root_token.cancelled() => {}
@@ -252,11 +255,27 @@ pub async fn run_with_client(
     if cfg.pod_log.follow {
         watch_h.abort();
     } else {
-        let _ = tokio::time::timeout(Duration::from_millis(150), watch_h).await;
+        match tokio::time::timeout(Duration::from_millis(150), &mut watch_h).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return Err(RunError::Other(format!("watch task failed: {e}")));
+            }
+            Err(_) => {
+                watch_h.abort();
+            }
+        }
     }
     h_mux.abort();
-    pipe_h.abort();
+    if !pipe_h.is_finished() {
+        pipe_h.abort();
+    }
     cursor_h.abort();
+
+    if let Some(e) = pipe_join_err {
+        return Err(RunError::Other(format!(
+            "pipeline forward task failed: {e}"
+        )));
+    }
 
     if limit_hit {
         return Err(RunError::Other(

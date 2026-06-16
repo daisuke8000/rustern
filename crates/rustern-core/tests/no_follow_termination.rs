@@ -199,6 +199,13 @@ async fn serve_mock_apiserver(
     }
 }
 
+async fn join_mock_server(server: tokio::task::JoinHandle<()>) {
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .expect("mock apiserver did not stop")
+        .expect("mock apiserver task panicked");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn no_follow_exits_after_all_logs_consumed() {
     let pods = vec![
@@ -236,7 +243,7 @@ async fn no_follow_exits_after_all_logs_consumed() {
         "expected one log fetch per pod"
     );
 
-    drop(server);
+    join_mock_server(server).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -271,5 +278,5 @@ async fn follow_mode_does_not_auto_exit_after_logs_eof() {
         .expect("follow run task panicked")
         .expect("follow run failed");
 
-    drop(server);
+    join_mock_server(server).await;
 }
