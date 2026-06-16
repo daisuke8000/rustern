@@ -63,13 +63,22 @@ fn spawn_pipeline_forward_task(
 
 /// Main entry: watcher → `StreamMap` → pipeline → stdout.
 pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
+    let client = build_client(&cfg.context).await?;
+    run_with_client(client, cfg).await
+}
+
+/// Run with a caller-supplied Kubernetes client (integration tests / mock apiserver).
+#[doc(hidden)]
+pub async fn run_with_client(
+    client: kube::Client,
+    cfg: CoreRunConfig,
+) -> Result<RunOutcome, RunError> {
     if cfg.only_log_lines {
         tracing::debug!(
             "--only-log-lines: stern hides +/- attach banners on stderr; rustern emits no stream lifecycle prefixes"
         );
     }
 
-    let client = build_client(&cfg.context).await?;
     let plan_cfg = PodWatchPlanConfig {
         query: &cfg.query,
         selector: cfg.selector.as_deref(),
@@ -174,7 +183,7 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let render_h = spawn_render_task(render_rx, formatter);
 
     let pipeline_check = pipeline.clone();
-    let pipe_h = spawn_pipeline_forward_task(
+    let mut pipe_h = spawn_pipeline_forward_task(
         raw_event_rx,
         pipeline,
         render_tx.clone(),
@@ -209,9 +218,10 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
     let root_w = cfg.root_token.clone();
     let mux_tx_w = mux_tx.clone();
     drop(mux_tx);
-    let watch_h = spawn_watch_task(w, root_w, mux_tx_w, watch_ctx);
+    let mut watch_h = spawn_watch_task(w, root_w, mux_tx_w, watch_ctx);
 
     let mut limit_hit = false;
+    let mut pipe_join_err = None;
     match follow_lim.take() {
         Some((_, mut lr)) => {
             tokio::select! {
@@ -225,17 +235,47 @@ pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
                 _ = cfg.root_token.cancelled() => {}
             }
         }
-        None => cfg.root_token.cancelled().await,
+        None => {
+            tokio::select! {
+                r = &mut pipe_h => {
+                    if let Err(e) = r {
+                        pipe_join_err = Some(e);
+                    }
+                    cfg.root_token.cancel();
+                }
+                _ = cfg.root_token.cancelled() => {}
+            }
+        }
     }
 
     cfg.root_token.cancelled().await;
     let _ = render_tx.send(RenderCommand::Shutdown).await;
     let _ = tokio::time::timeout(Duration::from_millis(150), render_h).await;
 
-    watch_h.abort();
+    if cfg.pod_log.follow {
+        watch_h.abort();
+    } else {
+        match tokio::time::timeout(Duration::from_millis(150), &mut watch_h).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return Err(RunError::Other(format!("watch task failed: {e}")));
+            }
+            Err(_) => {
+                watch_h.abort();
+            }
+        }
+    }
     h_mux.abort();
-    pipe_h.abort();
+    if !pipe_h.is_finished() {
+        pipe_h.abort();
+    }
     cursor_h.abort();
+
+    if let Some(e) = pipe_join_err {
+        return Err(RunError::Other(format!(
+            "pipeline forward task failed: {e}"
+        )));
+    }
 
     if limit_hit {
         return Err(RunError::Other(

@@ -93,6 +93,10 @@ where
                                 .collect();
                             watch_ctx.attach.pod_meta.prune(&keep).await;
                             registry.reconcile_snapshot(snap, &watch_ctx).await;
+                            if !watch_ctx.attach.pod_log.follow {
+                                // no-follow: exit after initial list reconcile completes.
+                                break;
+                            }
                         }
                     }
                 }
