@@ -38,5 +38,5 @@ pub use mux::{MuxCmd, spawn_mux_task};
 // Migration-only exports; use `PipelineSpec` instead (scheduled for removal).
 #[doc(hidden)]
 pub use pipeline::{PipelineStages, apply_pipeline};
-pub use run::run;
+pub use run::{run, run_with_client};
 pub use spec::{PipelineSpec, PipelineSpecBuilder};

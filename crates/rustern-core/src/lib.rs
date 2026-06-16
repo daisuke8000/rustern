@@ -19,7 +19,7 @@ pub use runtime::{
     BackpressurePolicy, CoreRunConfig, FormatterChoice, LossyMetrics, MuxCmd, MuxMetrics,
     OutputMode, PipelineSpec, PipelineSpecBuilder, RunError, RunOutcome, RunStats,
     RuntimeFwdConfig, RuntimeStatsConfig, build_log_request_semaphore, forward_to_render, run,
-    spawn_mux_task,
+    run_with_client, spawn_mux_task,
 };
 #[doc(hidden)]
 pub use runtime::{PipelineStages, apply_pipeline};
