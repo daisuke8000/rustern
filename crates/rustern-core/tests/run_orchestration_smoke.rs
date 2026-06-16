@@ -198,10 +198,16 @@ async fn serve_mock_apiserver(
     let list_body = serde_json::to_vec(&list).expect("pod list json");
 
     while let Some((req, send)) = handle.next_request().await {
+        let method = req.method();
         let path = req.uri().path();
         let query = req.uri().query().unwrap_or("");
+        let is_watch = query
+            .split('&')
+            .any(|part| part == "watch=1" || part == "watch=true");
+        let is_app_log = path == "/api/v1/namespaces/default/pods/pod-a/log"
+            && query.split('&').any(|part| part == "container=app");
 
-        if path.ends_with("/pods") && !query.contains("watch=1") {
+        if method == http::Method::GET && path.ends_with("/pods") && !is_watch {
             let resp = Response::builder()
                 .status(StatusCode::OK)
                 .body(kube::client::Body::from(list_body.clone()))
@@ -210,7 +216,7 @@ async fn serve_mock_apiserver(
             continue;
         }
 
-        if path.contains("/log") {
+        if method == http::Method::GET && is_app_log {
             let mut body = String::new();
             for i in 0..log_lines {
                 use std::fmt::Write;
@@ -225,7 +231,7 @@ async fn serve_mock_apiserver(
             continue;
         }
 
-        if query.contains("watch=1") {
+        if method == http::Method::GET && path.ends_with("/pods") && is_watch {
             let resp = Response::builder()
                 .status(StatusCode::OK)
                 .body(kube::client::Body::empty())
