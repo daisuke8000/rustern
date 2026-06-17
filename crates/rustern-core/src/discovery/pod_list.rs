@@ -81,6 +81,7 @@ impl PodWatchPlan {
         if !pod_kind_field_query && let Some(fs) = combined_field_selector(cfg) {
             list = list.fields(&fs);
         }
+        list = list.limit(500);
 
         let watch_cfg = {
             let mut wc = WatchConfig::default();

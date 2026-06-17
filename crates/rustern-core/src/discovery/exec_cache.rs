@@ -221,11 +221,29 @@ pub(crate) fn run_exec_plugin(
             cmd.env("KUBERNETES_EXEC_INFO", json);
         }
     }
-    let output = cmd.output().ok()?;
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::debug!(?e, command, "exec plugin spawn failed");
+            return None;
+        }
+    };
     if !output.status.success() {
+        tracing::debug!(
+            command,
+            status = ?output.status,
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "exec plugin exited with failure"
+        );
         return None;
     }
-    let cred: ExecCredential = serde_json::from_slice(&output.stdout).ok()?;
+    let cred: ExecCredential = match serde_json::from_slice(&output.stdout) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!(?e, command, "exec plugin stdout JSON parse failed");
+            return None;
+        }
+    };
     let status = cred.status?;
     if status.token.as_deref().is_none_or(str::is_empty) {
         return None;
