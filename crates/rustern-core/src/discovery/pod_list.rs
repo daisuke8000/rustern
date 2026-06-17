@@ -28,6 +28,7 @@ pub(crate) struct PodWatchPlanConfig<'a> {
 }
 
 pub(crate) struct PodWatchPlan {
+    pub(crate) list_params: kube::api::ListParams,
     pub(crate) watch_cfg: WatchConfig,
     pub(crate) pod_regex: Option<Regex>,
 }
@@ -80,6 +81,7 @@ impl PodWatchPlan {
         if !pod_kind_field_query && let Some(fs) = combined_field_selector(cfg) {
             list = list.fields(&fs);
         }
+        list = list.limit(500);
 
         let watch_cfg = {
             let mut wc = WatchConfig::default();
@@ -93,6 +95,7 @@ impl PodWatchPlan {
         };
 
         Ok(Self {
+            list_params: list,
             watch_cfg,
             pod_regex,
         })

@@ -15,6 +15,7 @@ mod attach;
 mod config;
 mod cursor_store;
 mod forward;
+mod list_pods;
 mod mux;
 mod pipeline;
 mod pod_meta_cache;

@@ -144,6 +144,7 @@ async fn serve_mock_apiserver(
     pods: Vec<Pod>,
     log_lines: usize,
     log_requests_count: Arc<AtomicUsize>,
+    allow_watch: bool,
 ) {
     let list = ObjectList {
         types: TypeMeta {
@@ -161,8 +162,27 @@ async fn serve_mock_apiserver(
     while let Some((req, send)) = handle.next_request().await {
         let path = req.uri().path();
         let query = req.uri().query().unwrap_or("");
+        let is_watch = query
+            .split('&')
+            .any(|part| part == "watch=1" || part == "watch=true");
 
-        if path.ends_with("/pods") && !query.contains("watch=1") {
+        if is_watch {
+            if !allow_watch {
+                panic!(
+                    "no-follow must not open a watch stream; got {} {}",
+                    req.method(),
+                    req.uri()
+                );
+            }
+            let resp = Response::builder()
+                .status(StatusCode::OK)
+                .body(kube::client::Body::empty())
+                .unwrap();
+            send.send_response(resp);
+            continue;
+        }
+
+        if path.ends_with("/pods") {
             let resp = Response::builder()
                 .status(StatusCode::OK)
                 .body(kube::client::Body::from(list_body.clone()))
@@ -181,15 +201,6 @@ async fn serve_mock_apiserver(
             let resp = Response::builder()
                 .status(StatusCode::OK)
                 .body(kube::client::Body::from(body.into_bytes()))
-                .unwrap();
-            send.send_response(resp);
-            continue;
-        }
-
-        if query.contains("watch=1") {
-            let resp = Response::builder()
-                .status(StatusCode::OK)
-                .body(kube::client::Body::empty())
                 .unwrap();
             send.send_response(resp);
             continue;
@@ -225,6 +236,7 @@ async fn no_follow_exits_after_all_logs_consumed() {
         pods,
         log_lines_per_pod,
         served,
+        false,
     ));
 
     let (_kubeconfig, context) = temp_context();
@@ -255,7 +267,7 @@ async fn follow_mode_does_not_auto_exit_after_logs_eof() {
     let client = kube::Client::new(mock, "default");
     let log_requests_count = Arc::new(AtomicUsize::new(0));
     let served = Arc::clone(&log_requests_count);
-    let server = tokio::spawn(serve_mock_apiserver(handle, pods, 1, served));
+    let server = tokio::spawn(serve_mock_apiserver(handle, pods, 1, served, true));
 
     let (_kubeconfig, context) = temp_context();
     let root_token = CancellationToken::new();

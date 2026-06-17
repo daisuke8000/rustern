@@ -3,6 +3,9 @@ use std::time::Duration;
 
 use kube::Client;
 use kube::config::{KubeConfigOptions, Kubeconfig};
+use secrecy::SecretBox;
+
+use super::exec_cache::resolve_exec_token;
 
 #[derive(Debug, Clone, Default)]
 pub struct ContextSelector {
@@ -77,11 +80,79 @@ pub fn default_namespace(
         .to_string())
 }
 
+fn cluster_for_context<'a>(
+    kubeconfig: &'a Kubeconfig,
+    ctx_name: &str,
+) -> Option<&'a kube::config::Cluster> {
+    let named_ctx = kubeconfig.contexts.iter().find(|c| c.name == ctx_name)?;
+    let cluster_name = named_ctx.context.as_ref()?.cluster.as_str();
+    kubeconfig
+        .clusters
+        .iter()
+        .find(|c| c.name == cluster_name)
+        .and_then(|c| c.cluster.as_ref())
+}
+
+fn apply_exec_cache_to_kubeconfig(kubeconfig: &mut Kubeconfig, ctx_name: &str) {
+    let cluster = cluster_for_context(kubeconfig, ctx_name).cloned();
+    let Some(server) = cluster
+        .as_ref()
+        .and_then(|c| c.server.as_deref())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(user_name) = kubeconfig
+        .contexts
+        .iter()
+        .find(|c| c.name == ctx_name)
+        .and_then(|c| c.context.as_ref())
+        .and_then(|c| c.user.as_deref())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let exec = kubeconfig
+        .auth_infos
+        .iter()
+        .find(|u| u.name == user_name)
+        .and_then(|u| u.auth_info.as_ref())
+        .and_then(|a| a.exec.clone());
+    let Some(exec) = exec else {
+        return;
+    };
+    let Some(token) = resolve_exec_token(&server, &exec, cluster.as_ref()) else {
+        tracing::debug!(
+            user = %user_name,
+            server = %server,
+            "exec token resolution failed; using kubeconfig exec fallback"
+        );
+        return;
+    };
+    let Some(auth_info) = kubeconfig
+        .auth_infos
+        .iter_mut()
+        .find(|u| u.name == user_name)
+        .and_then(|u| u.auth_info.as_mut())
+    else {
+        return;
+    };
+    auth_info.token = Some(SecretBox::new(token.into_boxed_str()));
+    auth_info.exec = None;
+}
+
 pub async fn build_client(selector: &ContextSelector) -> Result<Client, ContextError> {
-    let kubeconfig = resolve_kubeconfig(selector)?;
-    let ctx_name = pick_context_name(&kubeconfig, selector)?;
+    let mut kubeconfig = resolve_kubeconfig(selector)?;
+    let ctx_name = pick_context_name(&kubeconfig, selector)?.to_string();
+    let ctx_for_cache = ctx_name.clone();
+    kubeconfig = tokio::task::spawn_blocking(move || {
+        apply_exec_cache_to_kubeconfig(&mut kubeconfig, &ctx_for_cache);
+        kubeconfig
+    })
+    .await
+    .map_err(|e| ContextError::Client(format!("exec cache task failed: {e}")))?;
     let opts = KubeConfigOptions {
-        context: Some(ctx_name.to_string()),
+        context: Some(ctx_name),
         cluster: None,
         user: None,
     };

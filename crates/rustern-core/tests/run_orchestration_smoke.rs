@@ -20,8 +20,8 @@
 //!
 //! Dispatch on URI path and query:
 //!
-//! - `GET .../pods` without `watch=1`: return serialized `ObjectList<Pod>`
-//! - `GET .../pods?watch=1`: empty body (watch may start after InitDone)
+//! - `GET .../pods` (list only): return serialized `ObjectList<Pod>`
+//! - `GET .../pods?watch=1`: follow mode only; no-follow must not issue watch
 //! - `GET .../pods/{name}/log`: finite RFC3339-prefixed lines (EOF for no-follow)
 //!
 //! # Timeouts
@@ -32,8 +32,7 @@
 //!
 //! # Follow vs no-follow
 //!
-//! - **No-follow**: watch breaks on `InitDone`, pipeline drains, expect `Ok(RunOutcome)`
-//!   within the timeout. Use finite log bodies.
+//! - **No-follow**: one-shot list + attach; no watch stream; pipeline drains within timeout
 //! - **Follow**: watch persists; use `select!` + manual `root_token.cancel()` or
 //!   assert a specific `RunError` (see `max_log_requests_cancel.rs`).
 
