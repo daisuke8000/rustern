@@ -38,6 +38,8 @@ miette = { version = "7.6", features = ["fancy"] }
 humantime = "2"
 chrono-tz = "0.10"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+dirs-next = "2"
+secrecy = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [package]

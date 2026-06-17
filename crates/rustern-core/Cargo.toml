@@ -27,13 +27,15 @@ jaq-json = { workspace = true }
 jiff = { workspace = true }
 owo-colors = "4"
 seahash = "4"
+dirs-next = { workspace = true }
+secrecy = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 bench = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
-tempfile = { workspace = true }
 tower-test = "0.4"
 http = "1"
 http-body-util = "0.1"

@@ -11,11 +11,13 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
+use super::attach::spawn_attach_pod_log;
 use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
 use super::cursor_store::{CursorUpdate, ReconnectCursorStore, run_cursor_update_processor};
 use super::forward::{
     LossyMetrics, MuxMetrics, RunStats, build_log_request_semaphore, forward_to_render,
 };
+use super::list_pods::list_pods_paginated;
 use super::mux::{MuxCmd, spawn_mux_task};
 use super::pod_meta_cache::PodMetaCache;
 use super::spec::PipelineSpec;
@@ -90,6 +92,7 @@ pub async fn run_with_client(
     let plan = PodWatchPlan::build(&client, &plan_cfg).await?;
     let pod_regex = plan.pod_regex;
     let watch_cfg = plan.watch_cfg;
+    let list_params = plan.list_params;
 
     let kube_cfg = resolve_kubeconfig(&cfg.context)?;
     let ctx_name = pick_context_name(&kube_cfg, &cfg.context)?;
@@ -107,7 +110,7 @@ pub async fn run_with_client(
     };
 
     let admission = WatchAdmissionPolicy::try_new(
-        context_name,
+        context_name.clone(),
         pod_regex,
         &cfg.exclude_pod,
         &cfg.namespaces,
@@ -119,7 +122,6 @@ pub async fn run_with_client(
     )
     .map_err(|e| RunError::Other(format!("invalid watch admission regex: {e}")))?;
 
-    let w = watcher(api, watch_cfg);
     let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
     let (raw_event_tx, raw_event_rx) =
         mpsc::channel::<Result<LogEvent, LogSourceError>>(cfg.fwd.buffer_size.max(1));
@@ -218,7 +220,29 @@ pub async fn run_with_client(
     let root_w = cfg.root_token.clone();
     let mux_tx_w = mux_tx.clone();
     drop(mux_tx);
-    let mut watch_h = spawn_watch_task(w, root_w, mux_tx_w, watch_ctx);
+    let watch_h = if cfg.pod_log.follow {
+        let w = watcher(api.clone(), watch_cfg);
+        Some(spawn_watch_task(w, root_w, mux_tx_w, watch_ctx))
+    } else {
+        let pods = list_pods_paginated(&api, &list_params).await?;
+        for pod in &pods {
+            if watch_ctx.admission.admit_pod(pod) {
+                watch_ctx
+                    .attach
+                    .pod_meta
+                    .update_from_pod(&context_name, pod)
+                    .await;
+            }
+        }
+        let keys = watch_ctx.admission.collect_snapshot(pods);
+        for key in keys {
+            let pod_t = cfg.root_token.child_token();
+            spawn_attach_pod_log(&watch_ctx, key, pod_t);
+        }
+        drop(mux_tx_w);
+        drop(watch_ctx);
+        None
+    };
 
     let mut limit_hit = false;
     let mut pipe_join_err = None;
@@ -252,18 +276,8 @@ pub async fn run_with_client(
     let _ = render_tx.send(RenderCommand::Shutdown).await;
     let _ = tokio::time::timeout(Duration::from_millis(150), render_h).await;
 
-    if cfg.pod_log.follow {
+    if let Some(watch_h) = watch_h {
         watch_h.abort();
-    } else {
-        match tokio::time::timeout(Duration::from_millis(150), &mut watch_h).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                return Err(RunError::Other(format!("watch task failed: {e}")));
-            }
-            Err(_) => {
-                watch_h.abort();
-            }
-        }
     }
     h_mux.abort();
     if !pipe_h.is_finished() {
