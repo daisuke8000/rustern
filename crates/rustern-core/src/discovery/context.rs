@@ -5,7 +5,7 @@ use kube::Client;
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use secrecy::SecretBox;
 
-use super::exec_cache::resolve_exec_token;
+use super::exec_resolver::resolve_exec_token;
 
 #[derive(Debug, Clone, Default)]
 pub struct ContextSelector {
@@ -93,7 +93,7 @@ fn cluster_for_context<'a>(
         .and_then(|c| c.cluster.as_ref())
 }
 
-fn apply_exec_cache_to_kubeconfig(kubeconfig: &mut Kubeconfig, ctx_name: &str) {
+fn apply_exec_token_to_kubeconfig(kubeconfig: &mut Kubeconfig, ctx_name: &str) {
     let cluster = cluster_for_context(kubeconfig, ctx_name).cloned();
     let Some(server) = cluster
         .as_ref()
@@ -121,7 +121,7 @@ fn apply_exec_cache_to_kubeconfig(kubeconfig: &mut Kubeconfig, ctx_name: &str) {
     let Some(exec) = exec else {
         return;
     };
-    let Some(token) = resolve_exec_token(&server, &exec, cluster.as_ref()) else {
+    let Some(token) = resolve_exec_token(&exec, cluster.as_ref()) else {
         tracing::debug!(
             user = %user_name,
             server = %server,
@@ -144,13 +144,13 @@ fn apply_exec_cache_to_kubeconfig(kubeconfig: &mut Kubeconfig, ctx_name: &str) {
 pub async fn build_client(selector: &ContextSelector) -> Result<Client, ContextError> {
     let mut kubeconfig = resolve_kubeconfig(selector)?;
     let ctx_name = pick_context_name(&kubeconfig, selector)?.to_string();
-    let ctx_for_cache = ctx_name.clone();
+    let ctx_for_exec = ctx_name.clone();
     kubeconfig = tokio::task::spawn_blocking(move || {
-        apply_exec_cache_to_kubeconfig(&mut kubeconfig, &ctx_for_cache);
+        apply_exec_token_to_kubeconfig(&mut kubeconfig, &ctx_for_exec);
         kubeconfig
     })
     .await
-    .map_err(|e| ContextError::Client(format!("exec cache task failed: {e}")))?;
+    .map_err(|e| ContextError::Client(format!("exec resolver task failed: {e}")))?;
     let opts = KubeConfigOptions {
         context: Some(ctx_name),
         cluster: None,
