@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::process::Command;
 
-use kube::config::{Cluster, ExecConfig};
+use kube::config::{Cluster, ExecConfig, ExecInteractiveMode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +84,7 @@ pub(crate) fn run_exec_plugin(
     if exec.provide_cluster_info
         && let Some(cluster) = cluster
     {
+        let interactive = exec.interactive_mode != Some(ExecInteractiveMode::Never);
         let info = ExecCredential {
             api_version: exec
                 .api_version
@@ -92,7 +93,7 @@ pub(crate) fn run_exec_plugin(
             kind: Some("ExecCredential".into()),
             spec: Some(ExecCredentialSpec {
                 cluster: Some(exec_cluster_from_config(cluster)),
-                interactive: None,
+                interactive: Some(interactive),
             }),
             status: None,
         };
