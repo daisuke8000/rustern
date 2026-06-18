@@ -27,7 +27,6 @@ jaq-json = { workspace = true }
 jiff = { workspace = true }
 owo-colors = "4"
 seahash = "4"
-dirs-next = { workspace = true }
 secrecy = { workspace = true }
 tempfile = { workspace = true }
 
