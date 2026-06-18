@@ -172,10 +172,16 @@ pub(crate) fn resolve_exec_token(exec: &ExecConfig, cluster: Option<&Cluster>) -
     run_exec_plugin(exec, cluster)?.token
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+
+    fn mark_executable(path: &Path) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     fn write_token_exec_script(dir: &Path, token: &str) -> PathBuf {
         let script = dir.join("token-exec.sh");
@@ -190,16 +196,14 @@ EOF
             ),
         )
         .expect("write script");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        mark_executable(&script);
         script
     }
 
     fn write_failing_exec_script(dir: &Path) -> PathBuf {
         let script = dir.join("fail-exec.sh");
         std::fs::write(&script, "#!/bin/sh\nexit 1\n").expect("write script");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        mark_executable(&script);
         script
     }
 
@@ -250,8 +254,7 @@ EOF
 "#,
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        mark_executable(&script);
         let exec = ExecConfig {
             command: Some(script.to_string_lossy().into_owned()),
             api_version: None,
@@ -311,8 +314,7 @@ EOF
 "#,
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        mark_executable(&script);
         let exec = ExecConfig {
             command: Some(script.to_string_lossy().into_owned()),
             api_version: Some("client.authentication.k8s.io/v1".into()),
@@ -343,8 +345,7 @@ EOF
 "#,
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        mark_executable(&script);
         let exec = ExecConfig {
             command: Some(script.to_string_lossy().into_owned()),
             api_version: Some("client.authentication.k8s.io/v1".into()),
