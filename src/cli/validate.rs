@@ -72,7 +72,7 @@ impl Cli {
         for p in &self.exclude {
             Regex::new(p).map_err(|e| format!("invalid --exclude regex: {e}"))?;
         }
-        Regex::new(&self.container).map_err(|e| format!("invalid container regex: {e}"))?;
+        Regex::new(&self.container).map_err(|e| format!("invalid --container regex: {e}"))?;
         for p in &self.highlight {
             Regex::new(p).map_err(|e| format!("invalid --highlight regex: {e}"))?;
         }

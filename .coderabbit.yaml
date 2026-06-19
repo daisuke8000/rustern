@@ -126,14 +126,6 @@ reviews:
       enabled: false
     unit_tests:
       enabled: false
-    custom:
-      - name: "pr mental model"
-        enabled: true
-        instructions: |
-          Read .github/coderabbit/pr-mental-model.md and follow it exactly for this PR.
-          Create only .github/pr-artifacts/pr-<PR_NUMBER>-mental-model.html (replace <PR_NUMBER> with the actual PR number).
-          Do not modify source code, tests, or any file other than that HTML file.
-          Open a stacked pull request against the current branch containing that single HTML file.
 
   tools:
     github-checks:
