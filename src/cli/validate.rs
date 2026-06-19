@@ -66,11 +66,21 @@ impl Cli {
         for p in &self.exclude_container {
             Regex::new(p).map_err(|e| format!("invalid --exclude-container regex: {e}"))?;
         }
+        for p in &self.include {
+            Regex::new(p).map_err(|e| format!("invalid --include regex: {e}"))?;
+        }
+        for p in &self.exclude {
+            Regex::new(p).map_err(|e| format!("invalid --exclude regex: {e}"))?;
+        }
+        Regex::new(&self.container).map_err(|e| format!("invalid container regex: {e}"))?;
         for p in &self.highlight {
             Regex::new(p).map_err(|e| format!("invalid --highlight regex: {e}"))?;
         }
         for p in &self.exit_on {
             Regex::new(p).map_err(|e| format!("invalid --exit-on regex: {e}"))?;
+        }
+        if let Some(ref expr) = self.json_query {
+            rustern_core::validate_filter(expr).map_err(|e| e.to_string())?;
         }
         if let Some(ref lv) = self.exit_on_level {
             rustern_core::pipeline::ExitOnLevel::parse(lv)?;

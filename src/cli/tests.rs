@@ -155,6 +155,30 @@ fn validate_rejects_invalid_highlight_regex() {
 }
 
 #[test]
+fn validate_rejects_invalid_include_regex() {
+    let cli = Cli::try_parse_from(["rstn", "--include", "(unclosed", "q"]).unwrap();
+    assert!(cli.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_invalid_exclude_regex() {
+    let cli = Cli::try_parse_from(["rstn", "--exclude", "(unclosed", "q"]).unwrap();
+    assert!(cli.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_invalid_container_regex() {
+    let cli = Cli::try_parse_from(["rstn", "--container", "(unclosed", "q"]).unwrap();
+    assert!(cli.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_invalid_json_query() {
+    let cli = Cli::try_parse_from(["rstn", "--jq", "(unclosed", "q"]).unwrap();
+    assert!(cli.validate().is_err());
+}
+
+#[test]
 fn validate_accepts_defaults() {
     let cli = cli_with_default_ns(&["x"]);
     cli.validate().unwrap();
