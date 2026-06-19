@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>PR Mental Model — #131</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 15px;
+      line-height: 1.75;
+      color: #1a1a2e;
+      background: #f8f9fc;
+      padding: 32px 24px;
+    }
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 1.75rem; font-weight: 700; color: #0f172a; margin-bottom: 6px; }
+    h2 { font-size: 1.2rem; font-weight: 700; color: #1e3a5f; margin: 32px 0 12px; border-bottom: 2px solid #c7d4e8; padding-bottom: 4px; }
+    h3 { font-size: 1rem; font-weight: 600; color: #334155; margin-bottom: 8px; }
+    .meta-table {
+      margin: 16px 0 24px;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    .meta-table td { padding: 3px 12px 3px 0; color: #475569; }
+    .meta-table td:first-child { font-weight: 600; color: #334155; min-width: 90px; }
+    .summary-box {
+      background: #1e3a5f;
+      color: #e8f0fc;
+      border-radius: 8px;
+      padding: 18px 24px;
+      font-size: 1.05rem;
+      line-height: 1.7;
+      margin-bottom: 32px;
+    }
+
+    /* Intent cards */
+    .intent-grid { display: grid; gap: 20px; }
+    .card {
+      background: #fff;
+      border: 1.5px solid #d1dbe8;
+      border-radius: 10px;
+      padding: 22px 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .card-title { font-size: 1.05rem; font-weight: 700; color: #0f172a; }
+    .tag {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 3px 9px;
+      border-radius: 99px;
+      background: #dbeafe;
+      color: #1d4ed8;
+      white-space: nowrap;
+    }
+    .tag.main    { background: #dcfce7; color: #15803d; }
+    .tag.design  { background: #fef9c3; color: #854d0e; }
+    .tag.robust  { background: #ede9fe; color: #6d28d9; }
+    .tag.bug     { background: #fee2e2; color: #b91c1c; }
+    .tag.ops     { background: #f1f5f9; color: #475569; }
+    .tag.align   { background: #fce7f3; color: #9d174d; }
+    .inferred {
+      font-size: 0.75rem;
+      background: #fef3c7;
+      color: #92400e;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-weight: 600;
+    }
+
+    /* なぜこの形か box */
+    .why-box {
+      background: #f0f7ff;
+      border-left: 4px solid #3b82f6;
+      border-radius: 0 6px 6px 0;
+      padding: 12px 16px;
+      margin-top: 14px;
+      font-size: 0.92rem;
+      color: #1e40af;
+    }
+    .why-box strong { display: block; font-size: 0.78rem; letter-spacing: 0.06em; color: #6b7280; margin-bottom: 4px; }
+
+    /* Before/After */
+    .ba-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+    .ba-col h4 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .ba-col.before h4 { color: #dc2626; }
+    .ba-col.after  h4 { color: #16a34a; }
+    pre, code {
+      font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.82rem;
+    }
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 7px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      line-height: 1.55;
+    }
+    .comment { color: #94a3b8; }
+    .kw      { color: #93c5fd; }
+    .fn      { color: #86efac; }
+    .str     { color: #fca5a5; }
+    .err-hi  { color: #f87171; font-weight: 700; }
+    .ok-hi   { color: #4ade80; font-weight: 700; }
+
+    /* Layer diagram */
+    .layer-diagram {
+      background: #0f172a;
+      color: #cbd5e1;
+      border-radius: 8px;
+      padding: 20px 24px;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 0.8rem;
+      line-height: 1.9;
+      overflow-x: auto;
+    }
+    .layer-label { color: #7dd3fc; font-weight: 700; }
+    .layer-err   { color: #f87171; }
+    .layer-ok    { color: #4ade80; }
+
+    /* Scope / Review */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .scope-box {
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-size: 0.9rem;
+    }
+    .scope-box.in  { background: #f0fdf4; border: 1.5px solid #86efac; }
+    .scope-box.out { background: #fef2f2; border: 1.5px solid #fca5a5; }
+    .scope-box h4  { font-size: 0.8rem; font-weight: 700; letter-spacing: 0.05em; margin-bottom: 8px; }
+    .scope-box.in  h4 { color: #15803d; }
+    .scope-box.out h4 { color: #b91c1c; }
+    ul { list-style: none; padding-left: 0; }
+    ul li { padding: 2px 0; }
+    ul li::before { margin-right: 6px; }
+    .scope-box.in  li::before { content: "✓"; color: #16a34a; }
+    .scope-box.out li::before { content: "✗"; color: #dc2626; }
+    .review-list li { padding: 5px 0 5px 20px; position: relative; border-bottom: 1px solid #f1f5f9; }
+    .review-list li::before { content: "→"; position: absolute; left: 0; color: #94a3b8; }
+    .review-list li:last-child { border-bottom: none; }
+
+    code.inline {
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 0.82rem;
+      color: #0f172a;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- 1. Title + PR metadata -->
+  <h1>PR Mental Model — #131</h1>
+  <table class="meta-table">
+    <tr><td>リポジトリ</td><td>daisuke8000/rustern</td></tr>
+    <tr><td>ブランチ</td><td><code class="inline">feat/dsk-83-fail-fast-validate</code> → <code class="inline">main</code></td></tr>
+    <tr><td>チケット</td><td>DSK-83</td></tr>
+    <tr><td>変更規模</td><td>+52 / −0 行（5 ファイル：.coderabbit.yaml, pr-mental-model.md, README.md, tests.rs, validate.rs）</td></tr>
+    <tr><td>PRタイプ</td><td>Backend (Rust) + DevOps</td></tr>
+  </table>
+
+  <!-- 2. One-line summary -->
+  <div class="summary-box">
+    不正な <code style="background:rgba(255,255,255,0.15);border-radius:4px;padding:1px 6px;">--include</code>・<code style="background:rgba(255,255,255,0.15);border-radius:4px;padding:1px 6px;">--exclude</code>・<code style="background:rgba(255,255,255,0.15);border-radius:4px;padding:1px 6px;">--container</code> regex および <code style="background:rgba(255,255,255,0.15);border-radius:4px;padding:1px 6px;">--jq</code> 式が、クラスタ接続の前に即座にエラーとして返るようになる。
+  </div>
+
+  <!-- 3. Alerts: none applicable -->
+
+  <!-- 4. Intent cards -->
+  <h2>変更インテント</h2>
+  <div class="intent-grid">
+
+    <!-- Card 1: fail-fast regex for include/exclude -->
+    <div class="card">
+      <div class="card-header">
+        <span class="tag main">主目的</span>
+        <span class="card-title">--include / --exclude の regex を接続前に検証する</span>
+      </div>
+      <div class="ba-grid">
+        <div class="ba-col before">
+          <h4>BEFORE</h4>
+          <pre><span class="comment">// validate.rs — これらのフラグは未検証のまま
+// PipelineSpec::build() で Regex::new() が呼ばれ
+// クラスタ接続後にパニックまたは遅延エラー</span>
+<span class="kw">for</span> p <span class="kw">in</span> &amp;self.exclude_pod {
+    Regex::new(p).<span class="fn">map_err</span>(...)?;
+}
+<span class="comment">// ← include / exclude の検証なし</span>
+<span class="kw">for</span> p <span class="kw">in</span> &amp;self.highlight {
+    Regex::new(p).<span class="fn">map_err</span>(...)?;
+}</pre>
+        </div>
+        <div class="ba-col after">
+          <h4>AFTER</h4>
+          <pre><span class="kw">for</span> p <span class="kw">in</span> &amp;self.exclude_pod {
+    Regex::new(p).<span class="fn">map_err</span>(...)?;
+}
+<span class="ok-hi">for</span> p <span class="ok-hi">in</span> <span class="ok-hi">&amp;self.include {</span>
+    <span class="ok-hi">Regex::new(p).map_err(|e|</span>
+        <span class="ok-hi">format!("invalid --include regex: {e}"))?;</span>
+<span class="ok-hi">}</span>
+<span class="ok-hi">for</span> p <span class="ok-hi">in</span> <span class="ok-hi">&amp;self.exclude {</span>
+    <span class="ok-hi">Regex::new(p).map_err(|e|</span>
+        <span class="ok-hi">format!("invalid --exclude regex: {e}"))?;</span>
+<span class="ok-hi">}</span>
+<span class="kw">for</span> p <span class="kw">in</span> &amp;self.highlight { ... }</pre>
+        </div>
+      </div>
+      <div class="why-box">
+        <strong>なぜこの形か</strong>
+        <code>--exclude-pod</code> / <code>--exclude-container</code> はすでに同じパターンで検証されていた。<code>--include</code> / <code>--exclude</code> だけが漏れていたため、既存の for ループ群と同一の構造で追加するのが最も自然。エラーメッセージも既存のフォーマットに合わせている。
+      </div>
+    </div>
+
+    <!-- Card 2: container (single value) -->
+    <div class="card">
+      <div class="card-header">
+        <span class="tag design">設計判断</span>
+        <span class="card-title">--container は Vec ではなく単一値として Regex::new を呼ぶ</span>
+      </div>
+      <pre><span class="comment">// --include / --exclude は Vec&lt;String&gt;</span>
+<span class="kw">for</span> p <span class="kw">in</span> &amp;self.include { Regex::<span class="fn">new</span>(p)...? }
+
+<span class="comment">// --container は String（単一フィルタ）</span>
+<span class="ok-hi">Regex::new(&amp;self.container)</span>
+    <span class="ok-hi">.map_err(|e| format!("invalid container regex: {e}"))?;</span></pre>
+      <div class="why-box">
+        <strong>なぜこの形か</strong>
+        <code>container</code> フィールドは <code>Vec&lt;String&gt;</code> ではなく <code>String</code> として定義されており（デフォルト <code>".*"</code> のワイルドカード）、for ループでなく直接 <code>Regex::new(&amp;self.container)</code> と書く方が型に忠実。ユーザーが <code>--container "(unclosed"</code> を渡した場合も同じ fail-fast 経路を通る。
+      </div>
+    </div>
+
+    <!-- Card 3: jq validation -->
+    <div class="card">
+      <div class="card-header">
+        <span class="tag robust">堅牢化</span>
+        <span class="card-title">--jq 式を rustern_core::validate_filter で早期検証する</span>
+      </div>
+      <pre><span class="comment">// validate.rs — json_query は Option&lt;String&gt;</span>
+<span class="ok-hi">if let Some(ref expr) = self.json_query {</span>
+    <span class="ok-hi">rustern_core::validate_filter(expr)</span>
+        <span class="ok-hi">.map_err(|e| e.to_string())?;</span>
+<span class="ok-hi">}</span></pre>
+      <div class="why-box">
+        <strong>なぜこの形か</strong>
+        jq フィルタの構文エラーはログストリームを開いてから発覚していた。<code>rustern_core::validate_filter</code> はパース専用の関数であり、クラスタへの接続コストゼロで呼べる。<code>Option</code> パターンマッチは「--jq を渡さない場合はゼロコスト」を明示するための最小限の分岐。
+      </div>
+    </div>
+
+    <!-- Card 4: tests -->
+    <div class="card">
+      <div class="card-header">
+        <span class="tag bug">バグ予防</span>
+        <span class="card-title">4 テストで各検証パスのリグレッションを防ぐ</span>
+      </div>
+      <pre><span class="comment">// src/cli/tests.rs — 追加された 4 テスト</span>
+<span class="ok-hi">#[test]</span>
+<span class="ok-hi">fn validate_rejects_invalid_include_regex() {</span>
+    <span class="ok-hi">let cli = Cli::try_parse_from(</span>
+        <span class="ok-hi">["rstn", "--include", "(unclosed", "q"]).unwrap();</span>
+    <span class="ok-hi">assert!(cli.validate().is_err());</span>
+<span class="ok-hi">}</span>
+<span class="comment">// 同様に: exclude / container / json_query も各 1 テスト</span></pre>
+      <div class="why-box">
+        <strong>なぜこの形か</strong>
+        既存テスト群（<code>validate_rejects_invalid_exclude_pod_regex</code> 等）と同一のパターン —「<code>(unclosed</code> を渡して <code>.is_err()</code>」— を踏襲。統一されたテスト構造が、将来フラグが追加された際の「検証漏れ」を視覚的にも検知しやすくする。
+      </div>
+    </div>
+
+    <!-- Card 5: CodeRabbit recipe -->
+    <div class="card">
+      <div class="card-header">
+        <span class="tag ops">リリース運用</span>
+        <span class="card-title">CodeRabbit custom recipe "pr mental model" を登録する</span>
+      </div>
+      <pre><span class="comment"># .coderabbit.yaml</span>
+<span class="kw">custom</span>:
+  - name: <span class="str">"pr mental model"</span>
+    enabled: <span class="ok-hi">true</span>
+    instructions: |
+      Read .github/coderabbit/pr-mental-model.md
+      and follow it exactly for this PR.
+      Create only .github/pr-artifacts/
+        pr-&lt;PR_NUMBER&gt;-mental-model.html
+      Do not modify source code, tests, or
+        any file other than that HTML file.
+      Open a stacked pull request...</pre>
+      <div class="why-box">
+        <strong>なぜこの形か</strong>
+        PR の意図理解を自動化するため、CodeRabbit のカスタムレシピ機能を使ってレビュー補助 HTML を生成する仕組みを整える。「ソースコードに触れない」「HTML 1 ファイルのみ」という制約を instructions に明記することで、レシピが副作用を起こすリスクを宣言的に排除している。
+      </div>
+    </div>
+
+    <!-- Card 6: pr-artifacts directory -->
+    <div class="card">
+      <div class="card-header">
+        <span class="tag align">ついでの整合</span>
+        <span class="card-title">.github/pr-artifacts/ を成果物の着地点として明示する</span>
+      </div>
+      <pre><span class="comment"># .github/pr-artifacts/README.md (新規)</span>
+HTML files here are generated by CodeRabbit
+custom recipe <span class="str">**pr mental model**</span>
+(<span class="str">@coderabbitai run pr mental model</span>).
+Optional review aids; not required for merge.</pre>
+      <div class="why-box">
+        <strong>なぜこの形か</strong>
+        ディレクトリが空のままだと Git に追跡されず、レシピが生成する HTML の配置先が存在しない状態になる。README.md を置くことでディレクトリを確立し、同時に「マージ必須でない任意成果物」であることをチームに伝える役割も担っている。
+      </div>
+    </div>
+
+  </div><!-- /intent-grid -->
+
+  <!-- 5. Data flow / layer diagram -->
+  <h2>レイヤー図：検証タイミングの変化</h2>
+  <div class="layer-diagram">
+<span class="layer-label">─── BEFORE (DSK-83 以前) ───────────────────────────────────────────</span>
+
+  rstn --include "(unclosed" my-pod
+    │
+    ▼
+  <span class="layer-label">[CLI parse]</span>         Clap が引数をパース（構文エラーなし）
+    │
+    ▼
+  <span class="layer-label">[Cli::validate()]</span>   --include は未検証のまま通過
+    │
+    ▼
+  <span class="layer-label">[kube connect]</span>      API サーバーへ接続・Pod 列挙
+    │
+    ▼
+  <span class="layer-label">[PipelineSpec::build]</span> <span class="layer-err">← ここで Regex::new が失敗・エラー表示</span>
+                       クラスタ接続コストがすでに発生済み
+
+<span class="layer-label">─── AFTER (このPR) ─────────────────────────────────────────────────</span>
+
+  rstn --include "(unclosed" my-pod
+    │
+    ▼
+  <span class="layer-label">[CLI parse]</span>         Clap が引数をパース
+    │
+    ▼
+  <span class="layer-label">[Cli::validate()]</span>   <span class="layer-ok">← Regex::new で即エラー / kube 接続なし</span>
+                       "invalid --include regex: ..."
+    ✗ 終了
+
+  <span class="layer-label">[kube connect]</span>      到達しない
+  <span class="layer-label">[PipelineSpec::build]</span> 到達しない
+  </div>
+
+  <!-- 6. Scope boundary -->
+  <h2>スコープ境界</h2>
+  <div class="two-col">
+    <div class="scope-box in">
+      <h4>IN SCOPE</h4>
+      <ul>
+        <li><code class="inline">--include</code> / <code class="inline">--exclude</code> regex 検証</li>
+        <li><code class="inline">--container</code> regex 検証（単一値）</li>
+        <li><code class="inline">--jq</code> / <code class="inline">json_query</code> フィルタ構文検証</li>
+        <li>上記 4 フラグの単体テスト追加</li>
+        <li>CodeRabbit custom recipe 登録</li>
+        <li><code class="inline">.github/pr-artifacts/</code> ディレクトリ確立</li>
+      </ul>
+    </div>
+    <div class="scope-box out">
+      <h4>OUT OF SCOPE</h4>
+      <ul>
+        <li><code class="inline">--query</code>（Pod 名パターン）の事前検証</li>
+        <li><code class="inline">--selector</code> / <code class="inline">--field-selector</code> の構文検証</li>
+        <li>ネットワーク・kube API エラーのハンドリング改善</li>
+        <li>既存 validate ロジックのリファクタ</li>
+        <li>jq フィルタの意味論的検証（構文のみ）</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 7. Review focus -->
+  <h2>レビューフォーカス</h2>
+  <ul class="review-list">
+    <li>
+      <strong>validate.rs:75</strong> — <code class="inline">Regex::new(&amp;self.container)</code> は <code class="inline">container</code> フィールドが <code class="inline">String</code>（デフォルト <code class="inline">".*"</code>）であることを前提にしている。型定義と一致しているか確認。
+    </li>
+    <li>
+      <strong>tests.rs:177</strong> — <code class="inline">--jq "(unclosed"</code> は jq 構文としても invalid か確認。<code class="inline">rustern_core::validate_filter</code> が括弧の対応を検出できることを保証する。
+    </li>
+    <li>
+      <strong>validate.rs の検証順</strong> — <code class="inline">include/exclude</code> → <code class="inline">container</code> → <code class="inline">highlight</code> → <code class="inline">exit_on</code> → <code class="inline">json_query</code> の順序はユーザー体験上問題ないか（最初に失敗した 1 件だけ報告される）。
+    </li>
+    <li>
+      <strong>.coderabbit.yaml</strong> — <code class="inline">enabled: true</code> のレシピはすべての PR でトリガーされる設定になっていないか確認（意図的なら問題なし）。
+    </li>
+  </ul>
+
+</div><!-- /container -->
+</body>
+</html>
