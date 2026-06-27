@@ -4,7 +4,7 @@ rustern is a multi-pod Kubernetes log tailer. **stern/kubectl behavioral parity*
 
 ## Do not comment on
 
-- Formatting or style already enforced in CI (`cargo fmt --check`).
+- Formatting or style already enforced in CI (`cargo fmt --all --check`).
 - Naming nits, import order, or redundant comments unless they hide a bug.
 - Suggesting Japanese comments in source (English only in code).
 - Test-helper ergonomics or fixture lifetime patterns when behavior is already correct and resources are intentionally kept alive.
@@ -21,6 +21,7 @@ rustern is a multi-pod Kubernetes log tailer. **stern/kubectl behavioral parity*
 
 - `src/cli` owns argument parsing and validation only; keep Kubernetes, streaming, rendering, and filtering behavior out of CLI code.
 - `src/run_defaults` and `src/run_config` own resolution from CLI inputs into run configuration; preserve stern/kubectl defaults and keep this layer free of async runtime orchestration.
+- `src/run_resolution.rs` is the testable run-resolution seam; keep it deterministic and free of live Kubernetes access or runtime orchestration.
 - `crates/rustern-core/src/discovery` owns Kubernetes object discovery and pod/container reconciliation; selector, namespace, and watch behavior should stay here rather than leaking into pipeline or render code.
 - `crates/rustern-core/src/source` owns log source construction and Kubernetes log stream requests; keep per-line filtering, formatting, and presentation out of source adapters.
 - `crates/rustern-core/src/pipeline` owns line transformations, filtering, classification, jq, JSON annotation, and exit-trigger decisions; avoid Kubernetes API calls or terminal rendering here.
@@ -34,6 +35,7 @@ General rules distilled from recurring review feedback—not implementation reci
 ### Process and config
 
 - Keep review tooling config minimal; remove stale or non-functional settings.
+- Durable review standards belong here; `.coderabbit.yaml` should only add schema settings and path-specific review deltas.
 - Source comments English; review comments Japanese.
 - Reference tracker issues by ID only in public repo text; use consistent branch prefixes with issue traceability.
 
@@ -60,6 +62,7 @@ General rules distilled from recurring review feedback—not implementation reci
 ### Tests
 
 - Compare unordered collections with set semantics, not slice order.
+- Prefer mock API servers, `run_with_client()` seams, or validation/unit tests over live kubeconfig-dependent black-box tests.
 - Long-lived fixtures and background drain tasks are often intentional—do not flag as dead code without evidence.
 
 ### Triage
