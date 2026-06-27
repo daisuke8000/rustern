@@ -6,6 +6,8 @@ tone_instructions: "簡潔に。重大度を明示。rustfmt/スタイルの指�
 
 reviews:
   profile: assertive
+  high_level_summary: true
+  high_level_summary_in_walkthrough: false
   poem: false
   review_details: false
   fail_commit_status: true
@@ -29,6 +31,7 @@ reviews:
 
   path_filters:
     - "!target/**"
+    - "!**/mutants.out*/**"
 
   path_instructions:
     - path: "crates/rustern-core/src/discovery/**"
@@ -63,6 +66,13 @@ reviews:
         - Require complete pod identity metadata; no silent defaults for missing fields.
         - Compatibility with kube client streaming APIs.
 
+    - path: "crates/rustern-core/src/render/**"
+      instructions: |
+        Rendering and terminal output:
+        - Keep display formatting separate from discovery, source, pipeline, and CLI defaults.
+        - Preserve color, prefix, JSON/extjson, and terminal behavior expected by users.
+        - Do not reach back into Kubernetes clients or mutable runtime state from rendering code.
+
     - path: "src/cli/**"
       instructions: |
         CLI surface:
@@ -79,6 +89,27 @@ reviews:
       instructions: |
         Run configuration assembly:
         - Ensure resolved config matches CLI inputs and discovery expectations.
+
+    - path: "src/run_resolution.rs"
+      instructions: |
+        Run resolution seam:
+        - Keep resolution deterministic and testable without live Kubernetes access.
+        - Do not pull async runtime orchestration or CLI parsing details into this seam.
+        - Preserve narrow public surface; prefer pub(crate) unless an API is intentionally exposed.
+
+    - path: "crates/rustern-core/tests/**"
+      instructions: |
+        Integration tests:
+        - Prefer mock API servers and run_with_client-style seams over live kubeconfig access.
+        - Assert no-follow termination, orchestration shutdown, and stream limits without hangs.
+        - Long-lived fixtures and background drains may be intentional; verify lifecycle before flagging.
+
+    - path: "crates/rustern-core/benches/**"
+      instructions: |
+        Benchmarks:
+        - Keep benchmark inputs deterministic and representative of hot log paths.
+        - Avoid benchmark-only behavior changes leaking into runtime code.
+        - Watch per-line allocations, regex reuse, and mux/backpressure costs.
 
     - path: ".github/copilot-instructions.md"
       instructions: |
