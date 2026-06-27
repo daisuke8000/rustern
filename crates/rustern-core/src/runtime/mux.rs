@@ -4,6 +4,7 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::StreamMap;
+use tokio_util::sync::CancellationToken;
 
 use super::config::BackpressurePolicy;
 use super::forward::{MuxMetrics, RunStats};
@@ -21,11 +22,13 @@ async fn mux_multiplex_loop(
     stats: Option<Arc<RunStats>>,
     policy: BackpressurePolicy,
     mux_metrics: Arc<MuxMetrics>,
+    token: CancellationToken,
 ) {
     let mut map: StreamMap<SourceKey, BoxedLogStream> = StreamMap::new();
     loop {
         tokio::select! {
             biased;
+            _ = token.cancelled() => break,
             cmd = mux_rx.recv() => {
                 match cmd {
                     Some(MuxCmd::Add(key, stream)) => {
@@ -69,6 +72,9 @@ async fn mux_multiplex_loop(
             }
         }
     }
+    if let Some(stats) = &stats {
+        stats.set_active_streams(0);
+    }
 }
 
 #[doc(hidden)]
@@ -78,6 +84,7 @@ pub fn spawn_mux_task(
     stats: Option<Arc<RunStats>>,
     policy: BackpressurePolicy,
     mux_metrics: Arc<MuxMetrics>,
+    token: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(mux_multiplex_loop(
         mux_rx,
@@ -85,6 +92,7 @@ pub fn spawn_mux_task(
         stats,
         policy,
         mux_metrics,
+        token,
     ))
 }
 
@@ -96,6 +104,7 @@ mod tests {
 
     use super::*;
     use crate::source::ContextName;
+    use tokio_util::sync::CancellationToken;
 
     fn source_key(name: &str) -> SourceKey {
         SourceKey {
@@ -119,6 +128,7 @@ mod tests {
             Some(stats.clone()),
             BackpressurePolicy::Blocking,
             mux_metrics,
+            CancellationToken::new(),
         );
 
         mux_tx
@@ -140,5 +150,28 @@ mod tests {
             .await
             .expect("mux task timed out")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn mux_exits_promptly_on_cancellation() {
+        let token = CancellationToken::new();
+        let (mux_tx, mux_rx) = mpsc::channel(4);
+        let (raw_tx, _raw_rx) = mpsc::channel(4);
+        let mux_metrics = MuxMetrics::new(None);
+        let task = spawn_mux_task(
+            mux_rx,
+            raw_tx,
+            None,
+            BackpressurePolicy::Blocking,
+            mux_metrics,
+            token.clone(),
+        );
+
+        token.cancel();
+        tokio::time::timeout(Duration::from_millis(150), task)
+            .await
+            .expect("mux task did not exit after cancellation")
+            .unwrap();
+        drop(mux_tx);
     }
 }

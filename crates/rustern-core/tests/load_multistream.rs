@@ -206,6 +206,7 @@ async fn run_mux_raw_load(pods: usize, lines_per_pod: usize) -> u64 {
         None,
         BackpressurePolicy::Blocking,
         mux_metrics,
+        token.clone(),
     );
 
     for (key, stream) in streams {
@@ -262,7 +263,14 @@ async fn run_pipeline_render_load(
     let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
     let (raw_tx, raw_rx) = mpsc::channel::<Result<LogEvent, LogSourceError>>(raw_buffer);
     let mux_metrics = MuxMetrics::new(None);
-    let mux_h = spawn_mux_task(mux_rx, raw_tx, None, mux_policy, mux_metrics.clone());
+    let mux_h = spawn_mux_task(
+        mux_rx,
+        raw_tx,
+        None,
+        mux_policy,
+        mux_metrics.clone(),
+        token.clone(),
+    );
 
     let metrics = LossyMetrics::new(None);
     let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(render_buffer.max(1));
@@ -374,6 +382,7 @@ async fn run_mux_lossy_load(raw_buffer: usize) -> u64 {
         None,
         BackpressurePolicy::Lossy,
         mux_metrics.clone(),
+        token.clone(),
     );
 
     // Hold the raw consumer through the observation window so the channel stays Full.

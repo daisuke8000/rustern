@@ -41,6 +41,7 @@ fn spawn_blocking_mux(
         None,
         BackpressurePolicy::Blocking,
         MuxMetrics::new(None),
+        CancellationToken::new(),
     )
 }
 
@@ -49,7 +50,14 @@ fn spawn_policy_mux(
     raw_tx: mpsc::Sender<Result<LogEvent, rustern_core::source::LogSourceError>>,
     policy: BackpressurePolicy,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_mux_task(mux_rx, raw_tx, None, policy, MuxMetrics::new(None))
+    spawn_mux_task(
+        mux_rx,
+        raw_tx,
+        None,
+        policy,
+        MuxMetrics::new(None),
+        CancellationToken::new(),
+    )
 }
 
 fn sample_key(i: usize) -> SourceKey {
