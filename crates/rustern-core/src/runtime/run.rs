@@ -317,7 +317,13 @@ pub async fn run_with_client(
     }
     shutdown_join_bounded(cursor_h, "cursor").await;
 
-    let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, render_tx.send(RenderCommand::Shutdown)).await;
+    if tokio::time::timeout(SHUTDOWN_TIMEOUT, render_tx.send(RenderCommand::Shutdown))
+        .await
+        .is_err()
+    {
+        tracing::debug!("render shutdown send timed out; closing render channel");
+    }
+    drop(render_tx);
     shutdown_join_bounded(render_h, "render").await;
 
     if let Some(e) = pipe_join_err {
