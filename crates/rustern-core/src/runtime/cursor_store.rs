@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use jiff::Timestamp;
 use tokio::sync::{RwLock, mpsc};
+use tokio_util::sync::CancellationToken;
 
 use crate::source::SourceKey;
 use crate::source::pod_log::PodLogRequest;
@@ -122,9 +123,17 @@ impl ReconnectCursorStore {
 pub(crate) async fn run_cursor_update_processor(
     mut rx: mpsc::UnboundedReceiver<CursorUpdate>,
     store: ReconnectCursorStore,
+    token: CancellationToken,
 ) {
-    while let Some(update) = rx.recv().await {
-        store.record(&update.key, update.timestamp).await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => break,
+            update = rx.recv() => {
+                let Some(update) = update else { break };
+                store.record(&update.key, update.timestamp).await;
+            }
+        }
     }
 }
 
@@ -343,7 +352,11 @@ mod tests {
         let key = sample_key("p", "u");
         let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
-        let processor = tokio::spawn(run_cursor_update_processor(rx, store.clone()));
+        let processor = tokio::spawn(run_cursor_update_processor(
+            rx,
+            store.clone(),
+            CancellationToken::new(),
+        ));
 
         tx.send(CursorUpdate {
             key: key.clone(),
@@ -401,7 +414,11 @@ mod tests {
         let keys = keys_on_same_shard(UPDATE_COUNT);
         let base_ts = Utc.with_ymd_and_hms(2026, 4, 28, 9, 0, 0).unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
-        let processor = tokio::spawn(run_cursor_update_processor(rx, store.clone()));
+        let processor = tokio::spawn(run_cursor_update_processor(
+            rx,
+            store.clone(),
+            CancellationToken::new(),
+        ));
 
         let expected: Vec<(SourceKey, DateTime<Utc>)> = keys
             .into_iter()
@@ -425,6 +442,20 @@ mod tests {
         for (key, ts) in expected {
             assert_eq!(store.get(&key).await, Some(ts));
         }
+    }
+
+    #[tokio::test]
+    async fn processor_exits_promptly_on_cancellation() {
+        let store = ReconnectCursorStore::new();
+        let token = CancellationToken::new();
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let processor = tokio::spawn(run_cursor_update_processor(rx, store, token.clone()));
+
+        token.cancel();
+        tokio::time::timeout(std::time::Duration::from_millis(150), processor)
+            .await
+            .expect("cursor processor did not exit after cancellation")
+            .unwrap();
     }
 
     #[tokio::test]

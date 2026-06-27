@@ -246,37 +246,50 @@ pub async fn forward_to_render(
     metrics: Arc<LossyMetrics>,
     token: CancellationToken,
 ) {
-    while let Some(item) = source_stream.next().await {
-        if token.is_cancelled() {
-            break;
-        }
-        match item {
-            Ok(ev) => {
-                if cfg.lossy {
-                    match tx.try_send(RenderCommand::Line(ev)) {
-                        Ok(()) => {
-                            if let Some(stats) = &metrics.stats {
-                                stats.record_forwarded_line();
+    loop {
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => break,
+            item = source_stream.next() => {
+                let Some(item) = item else { break };
+                match item {
+                    Ok(ev) => {
+                        if cfg.lossy {
+                            match tx.try_send(RenderCommand::Line(ev)) {
+                                Ok(()) => {
+                                    if let Some(stats) = &metrics.stats {
+                                        stats.record_forwarded_line();
+                                    }
+                                }
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    metrics.record_drop("channel_full").await;
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => break,
+                            }
+                        } else {
+                            tokio::select! {
+                                biased;
+                                _ = token.cancelled() => break,
+                                sent = tx.send(RenderCommand::Line(ev)) => {
+                                    if sent.is_err() {
+                                        break;
+                                    }
+                                    if let Some(stats) = &metrics.stats {
+                                        stats.record_forwarded_line();
+                                    }
+                                }
                             }
                         }
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            metrics.record_drop("channel_full").await;
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
                     }
-                } else if tx.send(RenderCommand::Line(ev)).await.is_err() {
-                    break;
-                } else if let Some(stats) = &metrics.stats {
-                    stats.record_forwarded_line();
+                    Err(LogSourceError::Api(e)) => {
+                        if let Some(stats) = &metrics.stats {
+                            stats.record_source_api_error();
+                        }
+                        tracing::warn!(error = %e, "source stream error");
+                    }
+                    Err(LogSourceError::Eof) | Err(LogSourceError::Cancelled) => {}
                 }
             }
-            Err(LogSourceError::Api(e)) => {
-                if let Some(stats) = &metrics.stats {
-                    stats.record_source_api_error();
-                }
-                tracing::warn!(error = %e, "source stream error");
-            }
-            Err(LogSourceError::Eof) | Err(LogSourceError::Cancelled) => {}
         }
     }
 }

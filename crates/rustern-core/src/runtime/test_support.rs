@@ -23,6 +23,7 @@ type MockHandle =
     tower_test::mock::Handle<http::Request<kube::client::Body>, http::Response<kube::client::Body>>;
 
 struct TestKeepalive {
+    _root_token: CancellationToken,
     _mock_handle: MockHandle,
     _mux_drain: Option<tokio::task::JoinHandle<()>>,
     _cursor_processor: Option<tokio::task::JoinHandle<()>>,
@@ -30,6 +31,7 @@ struct TestKeepalive {
 
 impl Drop for TestKeepalive {
     fn drop(&mut self) {
+        self._root_token.cancel();
         if let Some(h) = self._cursor_processor.take() {
             h.abort();
         }
@@ -117,9 +119,11 @@ impl TestOrchestratorBuilder {
         >();
         let reconnect_cursor = ReconnectCursorStore::new();
         let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel();
+        let root_token = CancellationToken::new();
         let cursor_processor = tokio::spawn(run_cursor_update_processor(
             cursor_update_rx,
             reconnect_cursor.clone(),
+            root_token.clone(),
         ));
         let ctx = PodWatchCtx {
             admission: WatchAdmissionPolicy::try_new(
@@ -143,7 +147,7 @@ impl TestOrchestratorBuilder {
             attach: AttachDeps {
                 mux_tx,
                 log_opener: Arc::new(PodLogSourceOpener::new(kube::Client::new(mock, "default"))),
-                root_child: CancellationToken::new(),
+                root_child: root_token.child_token(),
                 pod_log: self.pod_log,
                 cursor_reconnect: self.cursor_reconnect,
                 reconnect_cursor,
@@ -156,6 +160,7 @@ impl TestOrchestratorBuilder {
         TestOrchestratorFixture {
             inner: Arc::new(ctx),
             _keepalive: TestKeepalive {
+                _root_token: root_token,
                 _mock_handle: mock_handle,
                 _mux_drain: mux_drain,
                 _cursor_processor: Some(cursor_processor),

@@ -32,6 +32,32 @@ use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
 use crate::source::log_opener::PodLogSourceOpener;
 use crate::source::{ContextName, LogEvent, LogSourceError};
 
+/// Grace period for background tasks to exit after root cancellation before abort.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(150);
+
+async fn shutdown_join_bounded(
+    mut handle: JoinHandle<()>,
+    task: &'static str,
+) -> Option<tokio::task::JoinError> {
+    if handle.is_finished() {
+        return handle.await.err();
+    }
+    match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut handle).await {
+        Ok(result) => result.err(),
+        Err(_) => {
+            handle.abort();
+            tracing::debug!(task, "shutdown join timed out; aborted task");
+            match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut handle).await {
+                Ok(result) => result.err(),
+                Err(_) => {
+                    tracing::warn!(task, "shutdown task did not finish after abort");
+                    None
+                }
+            }
+        }
+    }
+}
+
 fn spawn_render_task(
     render_rx: mpsc::Receiver<RenderCommand>,
     formatter: Arc<dyn LineFormatter>,
@@ -143,6 +169,7 @@ pub async fn run_with_client(
         Some(stats.clone()),
         cfg.fwd.resolved_mux_policy(),
         mux_metrics,
+        cfg.root_token.clone(),
     );
 
     let metrics = LossyMetrics::new(Some(stats.clone()));
@@ -199,6 +226,7 @@ pub async fn run_with_client(
     let cursor_h = tokio::spawn(run_cursor_update_processor(
         cursor_update_rx,
         reconnect_cursor.clone(),
+        cfg.root_token.clone(),
     ));
 
     let watch_ctx = Arc::new(PodWatchCtx {
@@ -246,6 +274,7 @@ pub async fn run_with_client(
 
     let mut limit_hit = false;
     let mut pipe_join_err = None;
+    let mut pipe_joined = false;
     match follow_lim.take() {
         Some((_, mut lr)) => {
             tokio::select! {
@@ -262,6 +291,7 @@ pub async fn run_with_client(
         None => {
             tokio::select! {
                 r = &mut pipe_h => {
+                    pipe_joined = true;
                     if let Err(e) = r {
                         pipe_join_err = Some(e);
                     }
@@ -273,17 +303,30 @@ pub async fn run_with_client(
     }
 
     cfg.root_token.cancelled().await;
-    let _ = render_tx.send(RenderCommand::Shutdown).await;
-    let _ = tokio::time::timeout(Duration::from_millis(150), render_h).await;
 
+    // Cooperative shutdown: upstream first (watch → mux → pipeline → cursor), then render.
+    // The forward task holds a render_tx clone until pipeline join completes.
     if let Some(watch_h) = watch_h {
-        watch_h.abort();
+        shutdown_join_bounded(watch_h, "watch").await;
     }
-    h_mux.abort();
-    if !pipe_h.is_finished() {
-        pipe_h.abort();
+    shutdown_join_bounded(h_mux, "mux").await;
+    if !pipe_joined {
+        if let Some(e) = shutdown_join_bounded(pipe_h, "pipeline").await {
+            if !e.is_cancelled() {
+                pipe_join_err = Some(e);
+            }
+        }
     }
-    cursor_h.abort();
+    shutdown_join_bounded(cursor_h, "cursor").await;
+
+    if tokio::time::timeout(SHUTDOWN_TIMEOUT, render_tx.send(RenderCommand::Shutdown))
+        .await
+        .is_err()
+    {
+        tracing::debug!("render shutdown send timed out; closing render channel");
+    }
+    drop(render_tx);
+    shutdown_join_bounded(render_h, "render").await;
 
     if let Some(e) = pipe_join_err {
         return Err(RunError::Other(format!(
