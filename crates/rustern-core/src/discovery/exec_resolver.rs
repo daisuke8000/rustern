@@ -207,19 +207,28 @@ EOF
         script
     }
 
-    #[test]
-    fn resolve_exec_token_returns_token_on_success() {
-        let tmp = tempfile::tempdir().unwrap();
-        let script = write_token_exec_script(tmp.path(), "tok-ok");
-        let exec = ExecConfig {
-            command: Some(script.to_string_lossy().into_owned()),
-            api_version: Some("client.authentication.k8s.io/v1".into()),
+    fn test_exec(command: impl Into<String>) -> ExecConfig {
+        ExecConfig {
+            command: Some(command.into()),
+            api_version: None,
             args: None,
             env: None,
             drop_env: None,
             interactive_mode: None,
             provide_cluster_info: false,
             cluster: None,
+            install_hint: None,
+            other: Default::default(),
+        }
+    }
+
+    #[test]
+    fn resolve_exec_token_returns_token_on_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = write_token_exec_script(tmp.path(), "tok-ok");
+        let exec = ExecConfig {
+            api_version: Some("client.authentication.k8s.io/v1".into()),
+            ..test_exec(script.to_string_lossy().into_owned())
         };
         assert_eq!(resolve_exec_token(&exec, None).as_deref(), Some("tok-ok"));
     }
@@ -228,16 +237,7 @@ EOF
     fn resolve_exec_token_returns_none_on_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let script = write_failing_exec_script(tmp.path());
-        let exec = ExecConfig {
-            command: Some(script.to_string_lossy().into_owned()),
-            api_version: None,
-            args: None,
-            env: None,
-            drop_env: None,
-            interactive_mode: None,
-            provide_cluster_info: false,
-            cluster: None,
-        };
+        let exec = test_exec(script.to_string_lossy().into_owned());
         assert!(resolve_exec_token(&exec, None).is_none());
     }
 
@@ -255,16 +255,7 @@ EOF
         )
         .unwrap();
         mark_executable(&script);
-        let exec = ExecConfig {
-            command: Some(script.to_string_lossy().into_owned()),
-            api_version: None,
-            args: None,
-            env: None,
-            drop_env: None,
-            interactive_mode: None,
-            provide_cluster_info: false,
-            cluster: None,
-        };
+        let exec = test_exec(script.to_string_lossy().into_owned());
         assert!(resolve_exec_token(&exec, None).is_none());
     }
 
@@ -278,6 +269,7 @@ EOF
             tls_server_name: None,
             disable_compression: None,
             extensions: None,
+            other: Default::default(),
         }
     }
 
@@ -286,14 +278,9 @@ EOF
         let tmp = tempfile::tempdir().unwrap();
         let script = write_token_exec_script(tmp.path(), "tok-ok");
         let exec = ExecConfig {
-            command: Some(script.to_string_lossy().into_owned()),
             api_version: Some("client.authentication.k8s.io/v1".into()),
-            args: None,
-            env: None,
-            drop_env: None,
-            interactive_mode: None,
             provide_cluster_info: true,
-            cluster: None,
+            ..test_exec(script.to_string_lossy().into_owned())
         };
         assert!(resolve_exec_token(&exec, None).is_none());
     }
@@ -316,14 +303,9 @@ EOF
         .unwrap();
         mark_executable(&script);
         let exec = ExecConfig {
-            command: Some(script.to_string_lossy().into_owned()),
             api_version: Some("client.authentication.k8s.io/v1".into()),
-            args: None,
-            env: None,
-            drop_env: None,
             interactive_mode: Some(ExecInteractiveMode::Never),
-            provide_cluster_info: false,
-            cluster: None,
+            ..test_exec(script.to_string_lossy().into_owned())
         };
         assert_eq!(resolve_exec_token(&exec, None).as_deref(), Some("tok-env"));
     }
@@ -347,14 +329,9 @@ EOF
         .unwrap();
         mark_executable(&script);
         let exec = ExecConfig {
-            command: Some(script.to_string_lossy().into_owned()),
             api_version: Some("client.authentication.k8s.io/v1".into()),
-            args: None,
-            env: None,
-            drop_env: None,
-            interactive_mode: None,
             provide_cluster_info: true,
-            cluster: None,
+            ..test_exec(script.to_string_lossy().into_owned())
         };
         let cluster = sample_cluster();
         assert_eq!(
