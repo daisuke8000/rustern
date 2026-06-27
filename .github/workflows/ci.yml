@@ -43,10 +43,15 @@ jobs:
           components: rustfmt
 
       - name: Format
+        id: format
+        background: true
         run: cargo fmt --all --check
 
       - name: Build
         run: cargo build --workspace --locked --verbose
+
+      - name: Wait for format
+        wait: format
 
       - name: Test
         run: cargo test --workspace --locked --verbose
