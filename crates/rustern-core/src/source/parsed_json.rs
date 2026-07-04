@@ -1,11 +1,16 @@
 use jaq_json::Val;
 use serde_json::Value;
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum ParsedJson {
     Serde(Value),
     Jaq(Val),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("failed to convert parsed JSON to jaq value")]
+pub(crate) struct JaqConvertError;
 
 impl ParsedJson {
     pub fn level_str_at_dot_path(&self, dot_path: &str) -> Option<&str> {
@@ -25,10 +30,10 @@ impl ParsedJson {
         }
     }
 
-    pub fn to_jaq_val(&self) -> Result<Val, ()> {
+    pub(crate) fn to_jaq_val(&self) -> Result<Val, JaqConvertError> {
         match self {
             Self::Jaq(v) => Ok(v.clone()),
-            Self::Serde(v) => serde_json::from_value(v.clone()).map_err(|_| ()),
+            Self::Serde(v) => serde_json::from_value(v.clone()).map_err(|_| JaqConvertError),
         }
     }
 }

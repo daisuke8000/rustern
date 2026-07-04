@@ -225,12 +225,11 @@ pub async fn run_with_client(
         shutdown_join_bounded(watch_h, "watch").await;
     }
     shutdown_join_bounded(h_mux, "mux").await;
-    if !pipe_joined {
-        if let Some(e) = shutdown_join_bounded(pipe_h, "pipeline").await {
-            if !e.is_cancelled() {
-                pipe_join_err = Some(e);
-            }
-        }
+    if !pipe_joined
+        && let Some(e) = shutdown_join_bounded(pipe_h, "pipeline").await
+        && !e.is_cancelled()
+    {
+        pipe_join_err = Some(e);
     }
     if let Some(cursor_h) = cursor_h {
         shutdown_join_bounded(cursor_h, "cursor").await;

@@ -244,12 +244,13 @@ mod tests {
     #[test]
     fn pod_query_resolution_cases() {
         let empty_ns: [String; 0] = [];
-        let cases: &[(
-            Option<&str>,
-            Option<&str>,
-            Option<&str>,
-            Result<&str, RunResolutionError>,
-        )] = &[
+        type Case = (
+            Option<&'static str>,
+            Option<&'static str>,
+            Option<&'static str>,
+            Result<&'static str, RunResolutionError>,
+        );
+        let cases: &[Case] = &[
             (Some("myapp.*"), None, None, Ok("myapp.*")),
             (None, Some("app=foo"), None, Ok(".*")),
             (None, None, Some("metadata.name=foo"), Ok(".*")),

@@ -11,13 +11,16 @@ use super::{LogSource, LogSourceError, SourceMeta};
 #[cfg(any(test, feature = "bench"))]
 use super::BoxedLogStream;
 
+type OpenLogSourceFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + 'a>>;
+
 pub(crate) trait LogSourceOpener: Send + Sync {
     fn open(
         &self,
         meta: Arc<SourceMeta>,
         token: CancellationToken,
         request: PodLogRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>>;
+    ) -> OpenLogSourceFuture<'_>;
 }
 
 pub(crate) struct PodLogSourceOpener {
@@ -36,7 +39,7 @@ impl LogSourceOpener for PodLogSourceOpener {
         meta: Arc<SourceMeta>,
         token: CancellationToken,
         request: PodLogRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
+    ) -> OpenLogSourceFuture<'_> {
         let client = self.client.clone();
         Box::pin(async move {
             let src = PodLogSource::start(client, meta, token, request).await?;
@@ -88,7 +91,7 @@ impl LogSourceOpener for ScriptLogSourceOpener {
         meta: Arc<SourceMeta>,
         token: CancellationToken,
         _request: PodLogRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
+    ) -> OpenLogSourceFuture<'_> {
         let script = {
             let mut scripts = self.scripts.lock().expect("script queue");
             if scripts.is_empty() {
@@ -98,7 +101,7 @@ impl LogSourceOpener for ScriptLogSourceOpener {
             }
         };
         Box::pin(async move {
-            let inner: BoxedLogStream = Box::pin(futures::stream::iter(script.into_iter()));
+            let inner: BoxedLogStream = Box::pin(futures::stream::iter(script));
             Ok(Box::new(ScriptLogSource { meta, token, inner }) as Box<dyn LogSource>)
         })
     }

@@ -162,8 +162,7 @@ async fn log_stream_with_retry(
             }
             Err(e) if attempt + 1 >= max_attempts => {
                 return Err(LogSourceError::Api(format!(
-                    "after {} attempts: {}",
-                    max_attempts, e
+                    "after {max_attempts} attempts: {e}"
                 )));
             }
             Err(e) => {
@@ -216,17 +215,16 @@ impl LogLineTimestampResolver {
 
 fn split_log_line(raw: &[u8]) -> (Option<DateTime<Utc>>, Arc<str>) {
     let raw = trim_line_end(raw);
-    if let Some(sp) = raw.iter().position(|&b| b == b' ') {
-        if let Ok(ts_s) = std::str::from_utf8(&raw[..sp]) {
-            if let Ok(ts) = DateTime::parse_from_rfc3339(ts_s) {
-                let msg_raw = &raw[sp + 1..];
-                let msg: Arc<str> = match std::str::from_utf8(msg_raw) {
-                    Ok(msg) => Arc::from(msg),
-                    Err(_) => Arc::from(String::from_utf8_lossy(msg_raw).into_owned()),
-                };
-                return (Some(ts.with_timezone(&Utc)), msg);
-            }
-        }
+    if let Some(sp) = raw.iter().position(|&b| b == b' ')
+        && let Ok(ts_s) = std::str::from_utf8(&raw[..sp])
+        && let Ok(ts) = DateTime::parse_from_rfc3339(ts_s)
+    {
+        let msg_raw = &raw[sp + 1..];
+        let msg: Arc<str> = match std::str::from_utf8(msg_raw) {
+            Ok(msg) => Arc::from(msg),
+            Err(_) => Arc::from(String::from_utf8_lossy(msg_raw).into_owned()),
+        };
+        return (Some(ts.with_timezone(&Utc)), msg);
     }
     let msg: Arc<str> = match std::str::from_utf8(raw) {
         Ok(s) => Arc::from(s),

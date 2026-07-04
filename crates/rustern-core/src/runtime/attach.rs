@@ -165,7 +165,7 @@ pub(crate) fn spawn_attach_pod_log(
     let ctx = Arc::clone(ctx);
     tokio::spawn(async move {
         let meta = source_meta_for_key(
-            &ctx.admission.context_name(),
+            ctx.admission.context_name(),
             &ctx.attach.pod_meta,
             &key,
             ctx.attach.color_assign,
@@ -249,11 +249,11 @@ mod tests {
         fixture
             .attach
             .pod_meta
-            .update_from_pod(&fixture.admission.context_name(), &pod)
+            .update_from_pod(fixture.admission.context_name(), &pod)
             .await;
 
         let meta = source_meta_for_key(
-            &fixture.admission.context_name(),
+            fixture.admission.context_name(),
             &fixture.attach.pod_meta,
             &sample_key(),
             fixture.attach.color_assign,

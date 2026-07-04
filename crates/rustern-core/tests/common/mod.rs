@@ -41,6 +41,7 @@ pub fn mock_client_pair() -> (
     (kube::Client::new(mock, "default"), handle)
 }
 
+#[allow(dead_code)]
 pub fn core_run_config_for_test(follow: bool, root_token: CancellationToken) -> CoreRunConfig {
     core_run_config_for_test_with_max_log_requests(follow, 5, root_token)
 }
@@ -247,6 +248,7 @@ pub async fn serve_mock_apiserver(
     }
 }
 
+#[allow(dead_code)]
 pub async fn join_mock_server(server: tokio::task::JoinHandle<()>) {
     tokio::time::timeout(Duration::from_secs(1), server)
         .await

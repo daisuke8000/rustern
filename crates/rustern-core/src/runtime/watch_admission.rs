@@ -34,6 +34,7 @@ impl WatchAdmissionPolicy {
         &self.context_name
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         context_name: ContextName,
         pod_regex: Option<Regex>,
@@ -75,10 +76,10 @@ impl WatchAdmissionPolicy {
         let Some(ns) = pod.metadata.namespace.as_deref() else {
             return false;
         };
-        if let Some(allowed) = &self.allowed_ns {
-            if !allowed.contains(ns) {
-                return false;
-            }
+        if let Some(allowed) = &self.allowed_ns
+            && !allowed.contains(ns)
+        {
+            return false;
         }
         if self.exclude_pod.iter().any(|re| re.is_match(name)) {
             return false;
