@@ -280,7 +280,6 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     use crate::runtime::test_support::TestOrchestratorBuilder;
-    use crate::runtime::watch_ctx::{AttachDeps, PodWatchCtx};
     use crate::source::ContextName;
     use crate::source::pod_log::PodLogRequest;
 
@@ -372,15 +371,11 @@ mod tests {
             })
             .cursor_reconnect(true)
             .sem_permits(8)
+            .log_opener(Arc::new(
+                crate::source::log_opener::PodLogSourceOpener::new(client),
+            ))
             .build();
-        let base = &*base_fixture;
-        let ctx = Arc::new(PodWatchCtx {
-            admission: base.admission.clone(),
-            attach: AttachDeps {
-                log_opener: Arc::new(crate::source::log_opener::PodLogSourceOpener::new(client)),
-                ..base.attach.clone()
-            },
-        });
+        let ctx = base_fixture.arc();
 
         let (second_req_tx, second_req_rx) = oneshot::channel();
         let (second_resp_tx, second_resp_rx) = oneshot::channel();
@@ -497,14 +492,12 @@ mod tests {
             })
             .cursor_reconnect(true)
             .sem_permits(8)
+            .log_opener(ScriptLogSourceOpener::new(vec![
+                vec![Ok(ev1)],
+                vec![Ok(ev2)],
+            ]))
             .build();
-        let ctx = Arc::new(PodWatchCtx {
-            attach: AttachDeps {
-                log_opener: ScriptLogSourceOpener::new(vec![vec![Ok(ev1)], vec![Ok(ev2)]]),
-                ..fixture.attach.clone()
-            },
-            ..fixture.arc().as_ref().clone()
-        });
+        let ctx = fixture.arc();
 
         spawn_attach_pod_log(&ctx, key, pod_token.clone());
 

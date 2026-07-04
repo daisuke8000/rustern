@@ -14,15 +14,11 @@ use super::watch_admission::WatchAdmissionPolicy;
 use super::watch_ctx::{AttachDeps, PodWatchCtx};
 use crate::discovery::{ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy};
 use crate::source::ContextName;
-use crate::source::log_opener::PodLogSourceOpener;
+use crate::source::log_opener::{LogSourceOpener, ScriptLogSourceOpener};
 use crate::source::pod_log::PodLogRequest;
-
-type MockHandle =
-    tower_test::mock::Handle<http::Request<kube::client::Body>, http::Response<kube::client::Body>>;
 
 struct TestKeepalive {
     _root_token: CancellationToken,
-    _mock_handle: MockHandle,
     _mux_drain: Option<tokio::task::JoinHandle<()>>,
     _cursor_processor: Option<tokio::task::JoinHandle<()>>,
 }
@@ -67,6 +63,7 @@ pub(crate) struct TestOrchestratorBuilder {
     pod_log: PodLogRequest,
     cursor_reconnect: bool,
     sem_permits: usize,
+    log_opener: Option<Arc<dyn LogSourceOpener>>,
 }
 
 impl TestOrchestratorBuilder {
@@ -79,6 +76,7 @@ impl TestOrchestratorBuilder {
             pod_log: PodLogRequest::default(),
             cursor_reconnect: false,
             sem_permits: 1,
+            log_opener: None,
         }
     }
 
@@ -102,6 +100,11 @@ impl TestOrchestratorBuilder {
         self
     }
 
+    pub(crate) fn log_opener(mut self, opener: Arc<dyn LogSourceOpener>) -> Self {
+        self.log_opener = Some(opener);
+        self
+    }
+
     pub(crate) fn build(self) -> TestOrchestratorFixture {
         let (mux_tx, mux_drain) = match self.mux_tx {
             Some(tx) => (tx, None),
@@ -111,10 +114,9 @@ impl TestOrchestratorBuilder {
                 (tx, Some(drain))
             }
         };
-        let (mock, mock_handle) = tower_test::mock::pair::<
-            http::Request<kube::client::Body>,
-            http::Response<kube::client::Body>,
-        >();
+        let log_opener = self
+            .log_opener
+            .unwrap_or_else(|| ScriptLogSourceOpener::new(vec![]));
         let reconnect_cursor = ReconnectCursorStore::new();
         let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel();
         let root_token = CancellationToken::new();
@@ -144,7 +146,7 @@ impl TestOrchestratorBuilder {
             .expect("admission policy"),
             attach: AttachDeps {
                 mux_tx,
-                log_opener: Arc::new(PodLogSourceOpener::new(kube::Client::new(mock, "default"))),
+                log_opener,
                 root_child: root_token.child_token(),
                 pod_log: self.pod_log,
                 cursor_reconnect: self.cursor_reconnect,
@@ -159,7 +161,6 @@ impl TestOrchestratorBuilder {
             inner: Arc::new(ctx),
             _keepalive: TestKeepalive {
                 _root_token: root_token,
-                _mock_handle: mock_handle,
                 _mux_drain: mux_drain,
                 _cursor_processor: Some(cursor_processor),
             },
