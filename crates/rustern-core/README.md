@@ -13,7 +13,8 @@ Workspace-wide user-facing docs live in the repository root [`README.md`](../../
 5. [`run` data flow and concurrency](#run-data-flow-and-concurrency)
 6. [Public API](#public-api)
 7. [Tests](#tests)
-8. [v0.1 scope and notes](#v01-scope-and-notes)
+8. [Multi-namespace watch (spike notes)](#multi-namespace-watch-spike-notes)
+9. [v0.1 scope and notes](#v01-scope-and-notes)
 
 ## Prerequisites and commands
 
@@ -270,6 +271,17 @@ RUSTERN_LOAD_LINES=100000 cargo test -p rustern-core --test load_multistream
 ```
 
 Capture baseline numbers in the PR when changing hot-path code; committed criterion thresholds are optional follow-up.
+
+## Multi-namespace watch (spike notes)
+
+When the user passes **multiple explicit namespaces** (`-n ns1 -n ns2`), `runtime/run.rs` today uses **`Api::all`** plus an event-time `allowed_ns` filter in [`WatchAdmissionPolicy`](src/runtime/watch_admission.rs). This is **correct** but can receive cluster-wide pod watch traffic on large clusters.
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Current: cluster watch + client filter** | One watcher; simple RBAC if cluster-scoped list/watch is allowed; label/field selectors still server-side | Delivers events for pods outside the requested namespaces; CPU scales with cluster churn |
+| **Per-namespace watchers + fan-in** | Watch traffic scoped to requested namespaces | N concurrent watches; merge/dedup complexity; RBAC must allow list/watch in each namespace |
+
+**Recommendation (2026-07):** keep the current approach until measured watch overhead on a representative large cluster. If profiling shows admission filtering dominates, prototype per-namespace fan-in behind the existing `PodWatchPlan` seam and compare event rates before switching defaults. `-l` (label selector) and `--field-selector` (field selector) are distinct options that already reduce server-side volume when set.
 
 ## v0.1 scope and notes
 
