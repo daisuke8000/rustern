@@ -432,6 +432,7 @@ async fn run_multistream_matrix(
         forward_metrics.clone(),
         token.clone(),
     ));
+    drop(render_tx);
     let drain_h = tokio::spawn(drain_render_consumer(render_rx, consumer, total_lines));
 
     for s in 0..streams {
