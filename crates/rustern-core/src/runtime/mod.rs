@@ -3,12 +3,12 @@
 //! | Module | Role |
 //! |--------|------|
 //! | [`config`] | `CoreRunConfig`, formatter choice, errors/results |
-//! | [`forward`] | `LossyMetrics`, `forward_to_render`, log concurrency semaphore |
+//! | [`forward`] | `LossyMetrics`, `forward_to_render` |
+//! | [`attach`] | Pod log attach, concurrent stream start semaphore |
 //! | [`spec`] | [`PipelineSpec`] — compiled pipeline for the `run` stream |
 //! | [`pipeline`] | Internal stage wiring for [`PipelineSpec`] |
 //! | [`run`] | `run` — watch, channels, `tokio::spawn` wiring |
 //! | [`watch`] | Pod watch loop and reconcile handlers |
-//! | [`attach`] | Pod log stream attach |
 //! | [`mux`] | `StreamMap` multiplexing |
 
 mod attach;
@@ -17,6 +17,7 @@ mod cursor_store;
 mod forward;
 mod list_pods;
 mod mux;
+mod mux_forward_core;
 mod pipeline;
 mod pod_meta_cache;
 mod registry;
@@ -28,13 +29,13 @@ mod watch;
 mod watch_admission;
 mod watch_ctx;
 
+pub use attach::build_log_request_semaphore;
 pub use config::{
     BackpressurePolicy, CoreRunConfig, FormatterChoice, OutputMode, RunError, RunOutcome,
     RuntimeFwdConfig, RuntimeStatsConfig,
 };
-pub use forward::{
-    LossyMetrics, MuxMetrics, RunStats, build_log_request_semaphore, forward_to_render,
-};
+pub use forward::{LossyMetrics, MuxMetrics, RunStats, forward_to_render};
 pub use mux::{MuxCmd, spawn_mux_task};
+pub use mux_forward_core::{MuxForwardCore, MuxForwardCoreHandles};
 pub use run::{run, run_with_client};
 pub use spec::{PipelineSpec, PipelineSpecBuilder};

@@ -8,17 +8,12 @@ use kube::Api;
 use kube::runtime::watcher::watcher;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::sync::CancellationToken;
 
-use super::attach::spawn_attach_pod_log;
-use super::config::{CoreRunConfig, RunError, RunOutcome, RuntimeFwdConfig};
+use super::attach::{build_log_request_semaphore, spawn_attach_pod_log};
+use super::config::{CoreRunConfig, RunError, RunOutcome};
 use super::cursor_store::{CursorUpdate, ReconnectCursorStore, run_cursor_update_processor};
-use super::forward::{
-    LossyMetrics, MuxMetrics, RunStats, build_log_request_semaphore, forward_to_render,
-};
 use super::list_pods::list_pods_paginated;
-use super::mux::{MuxCmd, spawn_mux_task};
+use super::mux_forward_core::MuxForwardCore;
 use super::pod_meta_cache::PodMetaCache;
 use super::spec::PipelineSpec;
 use super::watch::spawn_watch_task;
@@ -27,10 +22,10 @@ use super::watch_ctx::{AttachDeps, PodWatchCtx};
 use crate::discovery::context::build_client;
 use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
 use crate::pipeline::ExitWatchState;
+use crate::render::RenderCommand;
 use crate::render::setup::{RenderSetupError, build_line_formatter};
-use crate::render::{LineFormatter, RenderCommand, flush_ticker, render_task};
+use crate::source::ContextName;
 use crate::source::log_opener::PodLogSourceOpener;
-use crate::source::{ContextName, LogEvent, LogSourceError};
 
 /// Grace period for background tasks to exit after root cancellation before abort.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(150);
@@ -56,37 +51,6 @@ async fn shutdown_join_bounded(
             }
         }
     }
-}
-
-fn spawn_render_task(
-    render_rx: mpsc::Receiver<RenderCommand>,
-    formatter: Arc<dyn LineFormatter>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let stdout = tokio::io::stdout();
-        let _ = render_task(render_rx, stdout, formatter).await;
-    })
-}
-
-fn spawn_pipeline_forward_task(
-    raw_event_rx: mpsc::Receiver<Result<LogEvent, LogSourceError>>,
-    spec: PipelineSpec,
-    render_tx: mpsc::Sender<RenderCommand>,
-    fwd_cfg: RuntimeFwdConfig,
-    metrics: Arc<LossyMetrics>,
-    fwd_token: CancellationToken,
-) -> JoinHandle<()> {
-    let pipe_stream = {
-        let s = ReceiverStream::new(raw_event_rx);
-        spec.apply(s)
-    };
-    tokio::spawn(forward_to_render(
-        pipe_stream,
-        render_tx,
-        fwd_cfg,
-        metrics,
-        fwd_token,
-    ))
 }
 
 /// Main entry: watcher → `StreamMap` → pipeline → stdout.
@@ -145,10 +109,6 @@ pub async fn run_with_client(
     )
     .map_err(|e| RunError::Other(format!("invalid watch admission regex: {e}")))?;
 
-    let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
-    let (raw_event_tx, raw_event_rx) =
-        mpsc::channel::<Result<LogEvent, LogSourceError>>(cfg.fwd.buffer_size.max(1));
-
     let sem = build_log_request_semaphore(cfg.fwd.max_log_requests);
 
     let mut follow_lim: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)> = if cfg.pod_log.follow {
@@ -157,42 +117,6 @@ pub async fn run_with_client(
         None
     };
     let follow_limit_notifier = follow_lim.as_ref().map(|(s, _)| s.clone());
-
-    let stats = RunStats::from_fwd(&cfg.fwd);
-    let mux_metrics = MuxMetrics::new(Some(stats.clone()));
-    let h_mux = spawn_mux_task(
-        mux_rx,
-        raw_event_tx,
-        Some(stats.clone()),
-        cfg.fwd.resolved_mux_policy(),
-        mux_metrics,
-        cfg.root_token.clone(),
-    );
-
-    let metrics = LossyMetrics::new(Some(stats.clone()));
-    let metrics_rep = metrics.clone();
-    let rep_token = cfg.root_token.clone();
-    tokio::spawn(async move {
-        metrics_rep.cumulative_reporter(rep_token).await;
-    });
-    if let Some(stats_cfg) = cfg.fwd.stats {
-        let stats_rep = stats.clone();
-        let stats_token = cfg.root_token.clone();
-        tokio::spawn(async move {
-            stats_rep
-                .stderr_reporter(stats_cfg.interval, stats_token)
-                .await;
-        });
-    }
-
-    let (render_tx, render_rx) = mpsc::channel::<RenderCommand>(cfg.fwd.render_channel_capacity());
-    let flush_token = cfg.root_token.clone();
-    let flush_tx = render_tx.clone();
-    tokio::spawn(flush_ticker(
-        flush_tx,
-        flush_token,
-        Duration::from_millis(50),
-    ));
 
     let formatter = build_line_formatter(&cfg.formatter, &cfg.include, &cfg.highlight).map_err(
         |e: RenderSetupError| match e {
@@ -206,17 +130,32 @@ pub async fn run_with_client(
         let _ = &cfg.output; // reserved for future strict validation
     }
 
-    let render_h = spawn_render_task(render_rx, formatter);
+    let no_follow_pods = if cfg.pod_log.follow {
+        None
+    } else {
+        Some(list_pods_paginated(&api, &list_params).await?)
+    };
 
     let pipeline_check = pipeline.clone();
-    let mut pipe_h = spawn_pipeline_forward_task(
-        raw_event_rx,
+    let core = MuxForwardCore::spawn(
         pipeline,
-        render_tx.clone(),
         cfg.fwd.clone(),
-        metrics,
+        Some(formatter),
         cfg.root_token.clone(),
+        None,
     );
+    let stats = core.stats;
+    let mux_tx = core.mux_tx;
+    let render_tx = core.render_tx;
+    let h_mux = core.mux_h;
+    let mut pipe_h = core.pipe_h;
+    let render_h = core.render_h.ok_or_else(|| {
+        cfg.root_token.cancel();
+        RunError::Other("internal error: render task not spawned".into())
+    })?;
+    let metrics_rep_h = core.metrics_rep_h;
+    let stats_rep_h = core.stats_rep_h;
+    let flush_h = core.flush_h;
 
     let reconnect_cursor = ReconnectCursorStore::new();
     let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel::<CursorUpdate>();
@@ -249,7 +188,7 @@ pub async fn run_with_client(
         let w = watcher(api.clone(), watch_cfg);
         Some(spawn_watch_task(w, root_w, mux_tx_w, watch_ctx))
     } else {
-        let pods = list_pods_paginated(&api, &list_params).await?;
+        let pods = no_follow_pods.expect("no-follow pods prefetched before core spawn");
         for pod in &pods {
             if watch_ctx.admission.admit_pod(pod) {
                 watch_ctx
@@ -315,6 +254,11 @@ pub async fn run_with_client(
         }
     }
     shutdown_join_bounded(cursor_h, "cursor").await;
+    shutdown_join_bounded(metrics_rep_h, "metrics_reporter").await;
+    if let Some(h) = stats_rep_h {
+        shutdown_join_bounded(h, "stats_reporter").await;
+    }
+    shutdown_join_bounded(flush_h, "flush_ticker").await;
 
     if tokio::time::timeout(SHUTDOWN_TIMEOUT, render_tx.send(RenderCommand::Shutdown))
         .await
