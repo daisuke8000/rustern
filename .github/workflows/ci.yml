@@ -40,7 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: "1.88"
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Format
         id: format
@@ -49,6 +49,9 @@ jobs:
 
       - name: Build
         run: cargo build --workspace --locked --verbose
+
+      - name: Clippy
+        run: cargo clippy --workspace --locked -- -D warnings
 
       - name: Wait for format
         wait: format

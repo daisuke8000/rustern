@@ -7,6 +7,9 @@ pub enum ParsedJson {
     Jaq(Val),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JaqConvertError;
+
 impl ParsedJson {
     pub fn level_str_at_dot_path(&self, dot_path: &str) -> Option<&str> {
         match self {
@@ -25,10 +28,10 @@ impl ParsedJson {
         }
     }
 
-    pub fn to_jaq_val(&self) -> Result<Val, ()> {
+    pub(crate) fn to_jaq_val(&self) -> Result<Val, JaqConvertError> {
         match self {
             Self::Jaq(v) => Ok(v.clone()),
-            Self::Serde(v) => serde_json::from_value(v.clone()).map_err(|_| ()),
+            Self::Serde(v) => serde_json::from_value(v.clone()).map_err(|_| JaqConvertError),
         }
     }
 }

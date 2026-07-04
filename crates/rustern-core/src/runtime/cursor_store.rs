@@ -60,10 +60,12 @@ fn shard_index(key: &SourceKey) -> usize {
     (hasher.finish() as usize) % SHARD_COUNT
 }
 
+type CursorShardMap = Arc<Vec<RwLock<HashMap<SourceKey, DateTime<Utc>>>>>;
+
 /// Last-seen log line timestamp per stream, used to resume follow streams after EOF.
 #[derive(Clone)]
 pub(crate) struct ReconnectCursorStore {
-    inner: Arc<Vec<RwLock<HashMap<SourceKey, DateTime<Utc>>>>>,
+    inner: CursorShardMap,
     stats: Option<Arc<CursorStoreStats>>,
 }
 

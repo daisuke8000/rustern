@@ -11,13 +11,16 @@ use super::{LogSource, LogSourceError, SourceMeta};
 #[cfg(any(test, feature = "bench"))]
 use super::BoxedLogStream;
 
+type OpenLogSourceFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + 'a>>;
+
 pub(crate) trait LogSourceOpener: Send + Sync {
     fn open(
         &self,
         meta: Arc<SourceMeta>,
         token: CancellationToken,
         request: PodLogRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>>;
+    ) -> OpenLogSourceFuture<'_>;
 }
 
 pub(crate) struct PodLogSourceOpener {
