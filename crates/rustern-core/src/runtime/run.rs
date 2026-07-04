@@ -9,11 +9,12 @@ use kube::runtime::watcher::watcher;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::attach::{build_log_request_semaphore, spawn_attach_pod_log};
+use super::attach::build_log_request_semaphore;
 use super::config::{CoreRunConfig, RunError, RunOutcome};
 use super::cursor_service::CursorService;
 use super::list_pods::list_pods_paginated;
 use super::mux_forward_core::MuxForwardCore;
+use super::pod_lifecycle::PodLifecycle;
 use super::pod_meta_cache::PodMetaCache;
 use super::spec::{PipelineSpec, color_assign_opts};
 use super::watch::spawn_watch_task;
@@ -183,20 +184,8 @@ pub async fn run_with_client(
         Some(spawn_watch_task(w, root_w, mux_tx_w, watch_ctx))
     } else {
         let pods = no_follow_pods.expect("no-follow pods prefetched before core spawn");
-        for pod in &pods {
-            if watch_ctx.admission.admit_pod(pod) {
-                watch_ctx
-                    .attach
-                    .pod_meta
-                    .update_from_pod(&context_name, pod)
-                    .await;
-            }
-        }
-        let keys = watch_ctx.admission.collect_snapshot(pods);
-        for key in keys {
-            let pod_t = cfg.root_token.child_token();
-            spawn_attach_pod_log(&watch_ctx, key, pod_t);
-        }
+        let mut lifecycle = PodLifecycle::new();
+        lifecycle.on_init_snapshot(pods, &watch_ctx).await;
         drop(mux_tx_w);
         drop(watch_ctx);
         None

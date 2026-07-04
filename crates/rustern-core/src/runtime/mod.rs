@@ -20,6 +20,7 @@ mod list_pods;
 mod mux;
 mod mux_forward_core;
 mod pipeline;
+mod pod_lifecycle;
 mod pod_meta_cache;
 mod registry;
 mod run;
