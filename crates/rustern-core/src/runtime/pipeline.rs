@@ -79,7 +79,8 @@ where
     }
 
     if needs_json_annotation {
-        s = Box::pin(json_annotate(s));
+        let use_jaq_val = jq.is_some();
+        s = Box::pin(json_annotate(s, use_jaq_val));
     }
     s = Box::pin(level_classify(s, level_key));
 

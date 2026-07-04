@@ -13,12 +13,14 @@ pub struct ExtJsonLineFormatter {
 }
 
 /// Embed `message` as raw JSON when valid (stern `extjson` helper), else a JSON string.
-fn encode_message(message: &str) -> Value {
+fn encode_message(message: &str, structured: Option<&crate::source::ParsedJson>) -> Value {
+    if let Some(parsed) = structured {
+        return parsed.to_serde_value();
+    }
     let trimmed = message.trim_end_matches('\n');
-    if serde_json::from_str::<Value>(trimmed).is_ok() {
-        serde_json::from_str(trimmed).expect("valid json checked")
-    } else {
-        Value::String(trimmed.to_string())
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => v,
+        Err(_) => Value::String(trimmed.to_string()),
     }
 }
 
@@ -30,7 +32,10 @@ fn build_object(event: &LogEvent, all_namespaces: bool) -> Map<String, Value> {
     }
     obj.insert("pod".into(), json!(event.source.pod));
     obj.insert("container".into(), json!(event.source.container));
-    obj.insert("message".into(), encode_message(&event.message));
+    obj.insert(
+        "message".into(),
+        encode_message(&event.message, event.structured.as_ref()),
+    );
     obj.insert("timestamp".into(), json!(event.timestamp.to_rfc3339()));
     if let Some(node) = &event.source.node {
         obj.insert("node".into(), json!(node));
@@ -141,6 +146,19 @@ mod tests {
         assert!(s.ends_with("\n}\n"));
         let v: Value = serde_json::from_str(s.trim()).unwrap();
         assert_eq!(v["message"], "hello");
+    }
+
+    #[test]
+    fn extjson_reuses_structured_json_without_reparse() {
+        use crate::source::ParsedJson;
+        let raw = r#"{"level":"error","msg":"boom"}"#;
+        let mut event = sample_event(raw);
+        event.structured = Some(ParsedJson::Serde(serde_json::from_str(raw).unwrap()));
+        let f = formatter(false, false);
+        let s = f.format_line(&event);
+        let v: Value = serde_json::from_str(s.trim()).unwrap();
+        assert_eq!(v["message"]["level"], "error");
+        assert_eq!(v["message"]["msg"], "boom");
     }
 
     #[test]

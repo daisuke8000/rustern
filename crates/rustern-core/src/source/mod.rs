@@ -5,12 +5,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 pub mod log_opener;
+pub mod parsed_json;
 pub mod pod_log;
 pub mod pod_meta;
+
+pub use parsed_json::ParsedJson;
 
 #[cfg(any(test, feature = "bench"))]
 pub use log_opener::ScriptLogSourceOpener;
@@ -79,7 +81,7 @@ pub struct LogEvent {
     pub source: Arc<SourceMeta>,
     pub timestamp: DateTime<Utc>,
     pub message: Arc<str>,
-    pub structured: Option<Value>,
+    pub structured: Option<ParsedJson>,
     pub level: Option<LogLevel>,
     /// Stable palette slot for pod-name highlighting.
     pub palette_index: Option<u8>,
