@@ -415,7 +415,6 @@ async fn run_production_core_load() -> (u64, u64) {
 
     drop(mux_tx);
     token.cancel();
-    let _ = render_tx.send(RenderCommand::Shutdown).await;
     join_with_deadline("forward", forward_h).await;
     let snapshot = stats.snapshot_and_reset();
     join_with_deadline("mux", mux_h).await;

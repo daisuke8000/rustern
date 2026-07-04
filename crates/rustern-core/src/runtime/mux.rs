@@ -106,7 +106,11 @@ pub fn spawn_mux_task(
 mod tests {
     use std::time::Duration;
 
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
     use futures::stream;
+    use tokio::sync::oneshot;
 
     use super::*;
     use crate::source::{ContextName, Labels, LogEvent, LogSourceError, SourceKind, SourceMeta};
@@ -204,6 +208,32 @@ mod tests {
             })
         }
 
+        struct SignalingStream {
+            state: u8,
+            polled: Option<oneshot::Sender<()>>,
+        }
+
+        impl futures::Stream for SignalingStream {
+            type Item = Result<LogEvent, LogSourceError>;
+
+            fn poll_next(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Option<Self::Item>> {
+                match self.state {
+                    0 => {
+                        self.state = 1;
+                        if let Some(tx) = self.polled.take() {
+                            let _ = tx.send(());
+                        }
+                        Poll::Ready(Some(sample_ev()))
+                    }
+                    1 => Poll::Ready(Some(sample_ev())),
+                    _ => Poll::Ready(None),
+                }
+            }
+        }
+
         let token = CancellationToken::new();
         let (mux_tx, mux_rx) = mpsc::channel(4);
         let (raw_tx, _raw_rx) = mpsc::channel(1);
@@ -218,13 +248,20 @@ mod tests {
             token.clone(),
         );
 
+        let (polled_tx, polled_rx) = oneshot::channel();
         mux_tx
             .send(MuxCmd::Add(
                 source_key("blocked"),
-                Box::pin(stream::iter(vec![sample_ev(), sample_ev()])),
+                Box::pin(SignalingStream {
+                    state: 0,
+                    polled: Some(polled_tx),
+                }),
             ))
             .await
             .unwrap();
+        polled_rx
+            .await
+            .expect("mux should poll stream before cancel");
         tokio::task::yield_now().await;
         token.cancel();
         tokio::time::timeout(Duration::from_millis(150), task)

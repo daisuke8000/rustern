@@ -130,6 +130,12 @@ pub async fn run_with_client(
         let _ = &cfg.output; // reserved for future strict validation
     }
 
+    let no_follow_pods = if cfg.pod_log.follow {
+        None
+    } else {
+        Some(list_pods_paginated(&api, &list_params).await?)
+    };
+
     let pipeline_check = pipeline.clone();
     let core = MuxForwardCore::spawn(
         pipeline,
@@ -143,9 +149,13 @@ pub async fn run_with_client(
     let render_tx = core.render_tx;
     let h_mux = core.mux_h;
     let mut pipe_h = core.pipe_h;
-    let render_h = core
-        .render_h
-        .expect("production run always spawns render task");
+    let render_h = core.render_h.ok_or_else(|| {
+        cfg.root_token.cancel();
+        RunError::Other("internal error: render task not spawned".into())
+    })?;
+    let metrics_rep_h = core.metrics_rep_h;
+    let stats_rep_h = core.stats_rep_h;
+    let flush_h = core.flush_h;
 
     let reconnect_cursor = ReconnectCursorStore::new();
     let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel::<CursorUpdate>();
@@ -178,7 +188,7 @@ pub async fn run_with_client(
         let w = watcher(api.clone(), watch_cfg);
         Some(spawn_watch_task(w, root_w, mux_tx_w, watch_ctx))
     } else {
-        let pods = list_pods_paginated(&api, &list_params).await?;
+        let pods = no_follow_pods.expect("no-follow pods prefetched before core spawn");
         for pod in &pods {
             if watch_ctx.admission.admit_pod(pod) {
                 watch_ctx
@@ -244,6 +254,11 @@ pub async fn run_with_client(
         }
     }
     shutdown_join_bounded(cursor_h, "cursor").await;
+    shutdown_join_bounded(metrics_rep_h, "metrics_reporter").await;
+    if let Some(h) = stats_rep_h {
+        shutdown_join_bounded(h, "stats_reporter").await;
+    }
+    shutdown_join_bounded(flush_h, "flush_ticker").await;
 
     if tokio::time::timeout(SHUTDOWN_TIMEOUT, render_tx.send(RenderCommand::Shutdown))
         .await

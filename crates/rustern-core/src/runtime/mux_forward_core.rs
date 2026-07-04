@@ -23,6 +23,9 @@ pub struct MuxForwardCoreHandles {
     pub mux_h: JoinHandle<()>,
     pub pipe_h: JoinHandle<()>,
     pub render_h: Option<JoinHandle<()>>,
+    pub metrics_rep_h: JoinHandle<()>,
+    pub stats_rep_h: Option<JoinHandle<()>>,
+    pub flush_h: JoinHandle<()>,
 }
 
 pub struct MuxForwardCore;
@@ -59,24 +62,26 @@ impl MuxForwardCore {
         let metrics = LossyMetrics::new(Some(stats.clone()));
         let metrics_rep = metrics.clone();
         let rep_token = token.clone();
-        tokio::spawn(async move {
+        let metrics_rep_h = tokio::spawn(async move {
             metrics_rep.cumulative_reporter(rep_token).await;
         });
-        if let Some(stats_cfg) = fwd_cfg.stats {
+        let stats_rep_h = if let Some(stats_cfg) = fwd_cfg.stats {
             let stats_rep = stats.clone();
             let stats_token = token.clone();
-            tokio::spawn(async move {
+            Some(tokio::spawn(async move {
                 stats_rep
                     .stderr_reporter(stats_cfg.interval, stats_token)
                     .await;
-            });
-        }
+            }))
+        } else {
+            None
+        };
 
         let (render_tx, render_rx) =
             mpsc::channel::<RenderCommand>(fwd_cfg.render_channel_capacity());
         let flush_token = token.clone();
         let flush_tx = render_tx.clone();
-        tokio::spawn(flush_ticker(
+        let flush_h = tokio::spawn(flush_ticker(
             flush_tx,
             flush_token,
             Duration::from_millis(50),
@@ -113,6 +118,9 @@ impl MuxForwardCore {
             mux_h,
             pipe_h,
             render_h,
+            metrics_rep_h,
+            stats_rep_h,
+            flush_h,
         }
     }
 }
