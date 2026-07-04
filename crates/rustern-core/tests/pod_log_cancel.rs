@@ -19,6 +19,8 @@ fn sample_meta(pod: &str) -> SourceMeta {
         node: None,
         labels: Arc::new(Labels::default()),
         uid: format!("uid-{pod}"),
+        palette_index: None,
+        container_palette_index: None,
     }
 }
 

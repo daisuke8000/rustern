@@ -300,6 +300,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(crate::source::Labels::default()),
                 uid: key.uid.clone(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: ts,
             message: Arc::from(message),

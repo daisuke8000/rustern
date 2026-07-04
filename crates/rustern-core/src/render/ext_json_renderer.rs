@@ -53,14 +53,14 @@ fn build_object(event: &LogEvent, all_namespaces: bool) -> Map<String, Value> {
 }
 
 impl LineFormatter for ExtJsonLineFormatter {
-    fn format_line(&self, event: &LogEvent) -> String {
+    fn format_into(&self, event: &LogEvent, buf: &mut String) {
         let obj = build_object(event, self.all_namespaces);
-        let line = if self.pretty {
-            serde_json::to_string_pretty(&Value::Object(obj)).expect("json")
+        if self.pretty {
+            buf.push_str(&serde_json::to_string_pretty(&Value::Object(obj)).expect("json"));
         } else {
-            serde_json::to_string(&Value::Object(obj)).expect("json")
-        };
-        line + "\n"
+            buf.push_str(&serde_json::to_string(&Value::Object(obj)).expect("json"));
+        }
+        buf.push('\n');
     }
 }
 
@@ -85,6 +85,8 @@ mod tests {
                 node: Some("node-1".into()),
                 labels: Arc::new(Labels(labels)),
                 uid: "uid-1".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc.with_ymd_and_hms(2024, 6, 15, 12, 0, 0).unwrap(),
             message: Arc::from(message),

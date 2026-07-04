@@ -126,6 +126,8 @@ async fn connect_mock_sources(
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: format!("uid-{p}"),
+                palette_index: None,
+                container_palette_index: None,
             });
             let client = kube::Client::new(mock.clone(), "default");
             let source = PodLogSource::start(

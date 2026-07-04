@@ -13,6 +13,7 @@ use super::pod_meta_cache::PodMetaCache;
 use super::watch_admission::WatchAdmissionPolicy;
 use super::watch_ctx::{AttachDeps, PodWatchCtx, should_track_cursors};
 use crate::discovery::{ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy};
+use crate::pipeline::ColorAssignOpts;
 use crate::source::ContextName;
 use crate::source::log_opener::{LogSourceOpener, ScriptLogSourceOpener};
 use crate::source::pod_log::PodLogRequest;
@@ -148,6 +149,7 @@ impl TestOrchestratorBuilder {
                 sem: Arc::new(Semaphore::new(self.sem_permits)),
                 follow_limit_notifier: None,
                 pod_meta: PodMetaCache::new(),
+                color_assign: ColorAssignOpts::default(),
             },
         };
         TestOrchestratorFixture {

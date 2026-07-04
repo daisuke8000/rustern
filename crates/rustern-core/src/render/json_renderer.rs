@@ -9,25 +9,25 @@ struct JsonLine<'a> {
     container: &'a str,
     namespace: &'a str,
     timestamp: String,
-    message: String,
+    message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    level: Option<String>,
+    level: Option<&'a str>,
 }
 
 pub struct JsonLineFormatter;
 
 impl LineFormatter for JsonLineFormatter {
-    fn format_line(&self, event: &LogEvent) -> String {
-        let level = event.level.as_ref().map(|l| l.as_str().to_string());
+    fn format_into(&self, event: &LogEvent, buf: &mut String) {
         let row = JsonLine {
             pod: &event.source.pod,
             container: &event.source.container,
             namespace: &event.source.namespace,
             timestamp: event.timestamp.to_rfc3339(),
-            message: event.message.to_string(),
-            level,
+            message: &event.message,
+            level: event.level.as_ref().map(|l| l.as_str()),
         };
-        serde_json::to_string(&row).expect("json") + "\n"
+        buf.push_str(&serde_json::to_string(&row).expect("json"));
+        buf.push('\n');
     }
 }
 
@@ -50,6 +50,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from("hi"),

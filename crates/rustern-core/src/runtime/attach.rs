@@ -14,6 +14,7 @@ use super::cursor_service::StreamEnd;
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_ctx::PodWatchCtx;
+use crate::pipeline::{ColorAssignOpts, apply_palette_to_meta};
 use crate::source::ContextName;
 use crate::source::retry::full_jitter_backoff;
 use crate::source::{SourceKey, SourceKind, SourceMeta};
@@ -31,9 +32,10 @@ async fn source_meta_for_key(
     context: &ContextName,
     cache: &PodMetaCache,
     key: &SourceKey,
+    color_opts: ColorAssignOpts,
 ) -> Arc<SourceMeta> {
     let snap = cache.lookup(key).await;
-    Arc::new(SourceMeta {
+    let mut meta = SourceMeta {
         context: context.clone(),
         namespace: key.namespace.clone(),
         pod: key.pod.clone(),
@@ -42,7 +44,11 @@ async fn source_meta_for_key(
         node: snap.node,
         labels: Arc::new(snap.labels),
         uid: key.uid.clone(),
-    })
+        palette_index: None,
+        container_palette_index: None,
+    };
+    apply_palette_to_meta(&mut meta, color_opts);
+    Arc::new(meta)
 }
 
 async fn attach_pod_log_stream(p: AttachPodLogParams) {
@@ -158,8 +164,13 @@ pub(crate) fn spawn_attach_pod_log(
 ) {
     let ctx = Arc::clone(ctx);
     tokio::spawn(async move {
-        let meta =
-            source_meta_for_key(&ctx.admission.context_name(), &ctx.attach.pod_meta, &key).await;
+        let meta = source_meta_for_key(
+            &ctx.admission.context_name(),
+            &ctx.attach.pod_meta,
+            &key,
+            ctx.attach.color_assign,
+        )
+        .await;
         attach_pod_log_stream(AttachPodLogParams {
             ctx,
             meta,
@@ -205,7 +216,13 @@ mod tests {
                 labels: Labels(labels),
             },
         );
-        let meta = source_meta_for_key(&ContextName("ctx".into()), &cache, &key).await;
+        let meta = source_meta_for_key(
+            &ContextName("ctx".into()),
+            &cache,
+            &key,
+            ColorAssignOpts::default(),
+        )
+        .await;
         assert_eq!(meta.node.as_deref(), Some("worker-1"));
         assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
     }
@@ -239,6 +256,7 @@ mod tests {
             &fixture.admission.context_name(),
             &fixture.attach.pod_meta,
             &sample_key(),
+            fixture.attach.color_assign,
         )
         .await;
         assert_eq!(meta.node.as_deref(), Some("worker-1"));
@@ -267,6 +285,8 @@ mod tests {
             node: None,
             labels: Arc::new(crate::source::Labels::default()),
             uid: key.uid.clone(),
+            palette_index: None,
+            container_palette_index: None,
         };
         let ts1 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
         let ts2 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 6).unwrap();

@@ -41,6 +41,8 @@ async fn mock_logs_through_pipeline_and_renderer() {
         node: None,
         labels: Arc::new(Labels::default()),
         uid: "uid-1".into(),
+        palette_index: None,
+        container_palette_index: None,
     };
 
     let source = PodLogSource::start(

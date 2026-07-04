@@ -23,35 +23,61 @@ pub struct DefaultLineFormatter {
     pub container_colors: bool,
 }
 
-fn format_wall_prefix(
+fn push_wall_prefix(
+    buf: &mut String,
     dt_utc: &DateTime<Utc>,
     style: TimestampStyle,
     zone: TimestampZone,
-) -> Option<String> {
-    Some(match style {
-        TimestampStyle::Omit => return None,
-        TimestampStyle::EpochSeconds => dt_utc.timestamp().to_string(),
+) -> bool {
+    match style {
+        TimestampStyle::Omit => return false,
+        TimestampStyle::EpochSeconds => {
+            use std::fmt::Write as _;
+            let _ = write!(buf, "{}", dt_utc.timestamp());
+        }
         TimestampStyle::Rfc3339 => match zone {
-            TimestampZone::Utc => dt_utc.to_rfc3339_opts(SecondsFormat::Nanos, false),
-            TimestampZone::Local => dt_utc
-                .with_timezone(&Local)
-                .to_rfc3339_opts(SecondsFormat::Nanos, false),
-            TimestampZone::Iana(tz) => dt_utc
-                .with_timezone(&tz)
-                .to_rfc3339_opts(SecondsFormat::Nanos, false),
+            TimestampZone::Utc => {
+                buf.push_str(&dt_utc.to_rfc3339_opts(SecondsFormat::Nanos, false));
+            }
+            TimestampZone::Local => {
+                buf.push_str(
+                    &dt_utc
+                        .with_timezone(&Local)
+                        .to_rfc3339_opts(SecondsFormat::Nanos, false),
+                );
+            }
+            TimestampZone::Iana(tz) => {
+                buf.push_str(
+                    &dt_utc
+                        .with_timezone(&tz)
+                        .to_rfc3339_opts(SecondsFormat::Nanos, false),
+                );
+            }
         },
         TimestampStyle::SternShort => match zone {
-            TimestampZone::Utc => dt_utc.format("%m-%d %H:%M:%S").to_string(),
-            TimestampZone::Local => dt_utc
-                .with_timezone(&Local)
-                .format("%m-%d %H:%M:%S")
-                .to_string(),
-            TimestampZone::Iana(tz) => dt_utc
-                .with_timezone(&tz)
-                .format("%m-%d %H:%M:%S")
-                .to_string(),
+            TimestampZone::Utc => {
+                use std::fmt::Write as _;
+                let _ = write!(buf, "{}", dt_utc.format("%m-%d %H:%M:%S"));
+            }
+            TimestampZone::Local => {
+                use std::fmt::Write as _;
+                let _ = write!(
+                    buf,
+                    "{}",
+                    dt_utc.with_timezone(&Local).format("%m-%d %H:%M:%S")
+                );
+            }
+            TimestampZone::Iana(tz) => {
+                use std::fmt::Write as _;
+                let _ = write!(
+                    buf,
+                    "{}",
+                    dt_utc.with_timezone(&tz).format("%m-%d %H:%M:%S")
+                );
+            }
         },
-    })
+    }
+    true
 }
 
 fn push_colored(slice: &mut String, text: &str, idx: Option<u8>, color_enabled: bool) {
@@ -66,17 +92,18 @@ fn push_colored(slice: &mut String, text: &str, idx: Option<u8>, color_enabled: 
 }
 
 impl LineFormatter for DefaultLineFormatter {
-    fn format_line(&self, event: &LogEvent) -> String {
-        let mut line = String::new();
-        if let Some(p) =
-            format_wall_prefix(&event.timestamp, self.timestamp_style, self.timestamp_zone)
-        {
-            line.push_str(&p);
+    fn format_into(&self, event: &LogEvent, line: &mut String) {
+        if push_wall_prefix(
+            line,
+            &event.timestamp,
+            self.timestamp_style,
+            self.timestamp_zone,
+        ) {
             line.push(' ');
         }
         let colorize = self.color_enabled;
         push_colored(
-            &mut line,
+            line,
             &event.source.pod,
             if self.pod_colors {
                 event.palette_index
@@ -87,7 +114,7 @@ impl LineFormatter for DefaultLineFormatter {
         );
         line.push('/');
         push_colored(
-            &mut line,
+            line,
             &event.source.container,
             if self.container_colors {
                 event.container_palette_index
@@ -99,7 +126,6 @@ impl LineFormatter for DefaultLineFormatter {
         line.push_str(" | ");
         line.push_str(&event.message);
         line.push('\n');
-        line
     }
 }
 
@@ -124,6 +150,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "uid-1".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from("hello"),
@@ -188,7 +216,13 @@ mod tests {
     #[test]
     fn default_timestamp_uses_rfc3339_nano() {
         let dt = Utc.with_ymd_and_hms(2024, 3, 15, 10, 30, 45).unwrap();
-        let prefix = format_wall_prefix(&dt, TimestampStyle::Rfc3339, TimestampZone::Utc).unwrap();
+        let mut prefix = String::new();
+        assert!(push_wall_prefix(
+            &mut prefix,
+            &dt,
+            TimestampStyle::Rfc3339,
+            TimestampZone::Utc
+        ));
         assert!(prefix.contains('.'));
         assert!(prefix.ends_with('Z') || prefix.contains("+00:00"));
     }

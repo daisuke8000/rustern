@@ -23,29 +23,18 @@ where
 {
     let includes: Arc<[Regex]> = includes.into();
     let excludes: Arc<[Regex]> = excludes.into();
-    inner.filter_map(move |r| {
-        let includes = Arc::clone(&includes);
-        let excludes = Arc::clone(&excludes);
-        async move {
-            match r {
-                Ok(ev) => {
-                    let msg = ev.message.as_ref();
-                    let include_ok =
-                        includes.is_empty() || includes.iter().any(|re| re.is_match(msg));
-                    if !include_ok {
-                        return None;
-                    }
-                    if !includes.is_empty() {
-                        return Some(Ok(ev));
-                    }
-                    if excludes.iter().any(|re| re.is_match(msg)) {
-                        return None;
-                    }
-                    Some(Ok(ev))
+    inner.filter(move |r| {
+        futures::future::ready(match r {
+            Err(_) => true,
+            Ok(ev) => {
+                let msg = ev.message.as_ref();
+                if !includes.is_empty() {
+                    includes.iter().any(|re| re.is_match(msg))
+                } else {
+                    !excludes.iter().any(|re| re.is_match(msg))
                 }
-                e => Some(e),
             }
-        }
+        })
     })
 }
 
@@ -67,6 +56,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from(msg),

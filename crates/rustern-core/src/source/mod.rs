@@ -65,6 +65,10 @@ pub struct SourceMeta {
     pub labels: Arc<Labels>,
     /// Pod `metadata.uid` (disambiguates reused names across rollouts).
     pub uid: String,
+    /// Precomputed pod palette slot (set at attach when `--pod-colors` is on).
+    pub palette_index: Option<u8>,
+    /// Precomputed container palette slot (set at attach when `--container-colors` is on).
+    pub container_palette_index: Option<u8>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -125,6 +129,8 @@ mod tests {
             node: None,
             labels: Arc::new(Labels::default()),
             uid: uid.into(),
+            palette_index: None,
+            container_palette_index: None,
         }
     }
 

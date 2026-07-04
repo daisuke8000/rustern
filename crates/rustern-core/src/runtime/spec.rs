@@ -40,7 +40,10 @@ fn compile_list(patterns: &[String]) -> Result<Arc<[Regex]>, regex::Error> {
         .map(|vec| vec.into())
 }
 
-fn color_assign_opts(formatter: &FormatterChoice, diff_container: bool) -> ColorAssignOpts {
+pub(crate) fn color_assign_opts(
+    formatter: &FormatterChoice,
+    diff_container: bool,
+) -> ColorAssignOpts {
     let FormatterChoice::Default {
         pod_colors,
         container_colors,
@@ -232,6 +235,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from(msg),

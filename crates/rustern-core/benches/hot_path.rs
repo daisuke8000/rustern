@@ -16,6 +16,7 @@ use rustern_core::render::LineFormatter;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::ext_json_renderer::ExtJsonLineFormatter;
 use rustern_core::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
+use rustern_core::render::{RenderCommand, render_task};
 use rustern_core::runtime::PipelineSpecBuilder;
 use rustern_core::source::{
     ContextName, Labels, LogEvent, LogSourceError, SourceKey, SourceKind, SourceMeta,
@@ -57,6 +58,8 @@ fn sample_event(message: &str) -> LogEvent {
             node: None,
             labels: Arc::new(Labels::default()),
             uid: "uid-bench".into(),
+            palette_index: None,
+            container_palette_index: None,
         }),
         timestamp: Utc.with_ymd_and_hms(2024, 3, 15, 10, 30, 45).unwrap(),
         message: Arc::from(message),
@@ -219,8 +222,13 @@ fn bench_default_formatter(c: &mut Criterion) {
         ("json_4k", json_message_4k()),
     ] {
         let event = sample_event(&msg);
-        group.bench_with_input(BenchmarkId::new("format_line", name), &event, |b, event| {
-            b.iter(|| black_box(formatter.format_line(black_box(event))));
+        group.bench_with_input(BenchmarkId::new("format_into", name), &event, |b, event| {
+            let mut buf = String::with_capacity(512);
+            b.iter(|| {
+                buf.clear();
+                formatter.format_into(black_box(event), &mut buf);
+                black_box(&buf);
+            });
         });
     }
     group.finish();
@@ -242,9 +250,49 @@ fn bench_highlight_formatter(c: &mut Criterion) {
     let formatter = SternHighlightLineFormatter::new(inner, re);
     let event = sample_event(&plain_message_256());
 
-    group.bench_function("format_line", |b| {
-        b.iter(|| black_box(formatter.format_line(black_box(&event))));
+    group.bench_function("format_into", |b| {
+        let mut buf = String::with_capacity(512);
+        b.iter(|| {
+            buf.clear();
+            formatter.format_into(black_box(&event), &mut buf);
+            black_box(&buf);
+        });
     });
+    group.finish();
+}
+
+fn bench_render_task(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut group = c.benchmark_group("render_task");
+    group.throughput(Throughput::Elements(BATCH));
+
+    let formatter = Arc::new(DefaultLineFormatter {
+        timestamp_style: TimestampStyle::SternShort,
+        timestamp_zone: TimestampZone::Utc,
+        color_enabled: true,
+        pod_colors: true,
+        container_colors: true,
+    });
+    let msg = plain_message_256();
+    let events: Vec<_> = event_batch(&msg);
+
+    group.bench_function("format_channel_sink", |b| {
+        b.iter(|| {
+            let events = events.clone();
+            let formatter = Arc::clone(&formatter);
+            rt.block_on(async move {
+                let (tx, rx) = mpsc::channel::<RenderCommand>(256);
+                let sink = tokio::io::sink();
+                let render = tokio::spawn(render_task(rx, sink, formatter));
+                for ev in events {
+                    tx.send(RenderCommand::Line(ev)).await.unwrap();
+                }
+                tx.send(RenderCommand::Shutdown).await.unwrap();
+                render.await.unwrap().unwrap();
+            });
+        });
+    });
+
     group.finish();
 }
 
@@ -432,6 +480,7 @@ criterion_group!(
     bench_extjson_formatter,
     bench_default_formatter,
     bench_highlight_formatter,
+    bench_render_task,
     bench_pipeline_spec_apply,
     bench_parse_log_line,
     bench_ingest_log_line,

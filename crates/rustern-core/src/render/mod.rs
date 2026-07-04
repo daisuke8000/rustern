@@ -18,8 +18,17 @@ pub mod raw_renderer;
 pub(crate) mod setup;
 
 pub trait LineFormatter: Send + Sync + 'static {
-    fn format_line(&self, event: &LogEvent) -> String;
+    fn format_into(&self, event: &LogEvent, buf: &mut String);
+
+    fn format_line(&self, event: &LogEvent) -> String {
+        let mut buf = String::new();
+        self.format_into(event, &mut buf);
+        buf
+    }
 }
+
+const RENDER_WRITER_CAPACITY: usize = 64 * 1024;
+const RENDER_RECV_BATCH: usize = 256;
 
 pub enum RenderCommand {
     Line(LogEvent),
@@ -35,19 +44,32 @@ pub async fn render_task<W>(
 where
     W: AsyncWrite + Unpin + Send,
 {
-    let mut buf = BufWriter::new(writer);
-    while let Some(cmd) = rx.recv().await {
-        match cmd {
-            RenderCommand::Line(ev) => {
-                let line = formatter.format_line(&ev);
-                buf.write_all(line.as_bytes()).await?;
-            }
-            RenderCommand::Flush => {
-                buf.flush().await?;
-            }
-            RenderCommand::Shutdown => {
-                buf.flush().await?;
-                break;
+    let mut buf = BufWriter::with_capacity(RENDER_WRITER_CAPACITY, writer);
+    let mut line_buf = String::new();
+    let mut batch = Vec::with_capacity(RENDER_RECV_BATCH);
+    loop {
+        batch.clear();
+        let n = rx.recv_many(&mut batch, RENDER_RECV_BATCH).await;
+        if n == 0 {
+            buf.flush().await?;
+            break;
+        }
+        for cmd in batch.drain(..) {
+            match cmd {
+                RenderCommand::Line(ev) => {
+                    line_buf.clear();
+                    let min_cap = ev.message.len().saturating_add(64);
+                    line_buf.reserve(min_cap);
+                    formatter.format_into(&ev, &mut line_buf);
+                    buf.write_all(line_buf.as_bytes()).await?;
+                }
+                RenderCommand::Flush => {
+                    buf.flush().await?;
+                }
+                RenderCommand::Shutdown => {
+                    buf.flush().await?;
+                    return Ok(());
+                }
             }
         }
     }

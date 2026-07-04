@@ -46,6 +46,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from(msg),

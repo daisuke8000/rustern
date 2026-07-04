@@ -7,6 +7,7 @@ use super::cursor_service::CursorService;
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_admission::WatchAdmissionPolicy;
+use crate::pipeline::ColorAssignOpts;
 use crate::source::log_opener::LogSourceOpener;
 use crate::source::pod_log::PodLogRequest;
 
@@ -25,6 +26,7 @@ pub(crate) struct AttachDeps {
     pub(crate) sem: Arc<Semaphore>,
     pub(crate) follow_limit_notifier: Option<mpsc::Sender<()>>,
     pub(crate) pod_meta: PodMetaCache,
+    pub(crate) color_assign: ColorAssignOpts,
 }
 
 pub(crate) fn should_track_cursors(cursor_reconnect: bool, follow: bool) -> bool {

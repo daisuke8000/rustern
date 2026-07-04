@@ -15,7 +15,7 @@ use super::cursor_service::CursorService;
 use super::list_pods::list_pods_paginated;
 use super::mux_forward_core::MuxForwardCore;
 use super::pod_meta_cache::PodMetaCache;
-use super::spec::PipelineSpec;
+use super::spec::{PipelineSpec, color_assign_opts};
 use super::watch::spawn_watch_task;
 use super::watch_admission::WatchAdmissionPolicy;
 use super::watch_ctx::{AttachDeps, PodWatchCtx, should_track_cursors};
@@ -171,6 +171,7 @@ pub async fn run_with_client(
             mux_tx: mux_tx.clone(),
             follow_limit_notifier,
             pod_meta: PodMetaCache::new(),
+            color_assign: color_assign_opts(&cfg.formatter, cfg.diff_container),
         },
     });
 
