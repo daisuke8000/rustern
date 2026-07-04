@@ -186,7 +186,6 @@ fn maps_flags_namespace_format_and_fwd() {
     assert_eq!(cfg.namespaces, vec!["kube-system"]);
     assert!(!cfg.pod_log.follow);
     assert!(matches!(cfg.formatter, FormatterChoice::Json));
-    assert!(matches!(cfg.formatter, FormatterChoice::Json));
     assert_eq!(cfg.fwd.buffer_size, 8192);
     assert!(cfg.fwd.lossy);
     assert_eq!(cfg.fwd.max_log_requests, 8);
