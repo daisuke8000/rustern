@@ -282,7 +282,6 @@ async fn run_pipeline_render_load(
     let fwd_cfg = RuntimeFwdConfig {
         buffer_size: render_buffer,
         lossy,
-        mux_policy,
         stats: None,
         max_log_requests: pods,
     };
@@ -380,7 +379,6 @@ async fn run_production_core_load() -> (u64, u64) {
     let fwd_cfg = RuntimeFwdConfig {
         buffer_size: BLOCKING_RENDER_BUFFER,
         lossy: false,
-        mux_policy: BackpressurePolicy::Blocking,
         stats: Some(RuntimeStatsConfig {
             interval: Duration::from_secs(30),
         }),
