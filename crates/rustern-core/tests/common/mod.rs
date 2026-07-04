@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Shared harness for driving [`run_with_client`] end-to-end without a real cluster.
 //!
 //! Build `(mock, handle)` via `tower_test::mock::pair` and pass `mock` to
