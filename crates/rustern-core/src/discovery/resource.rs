@@ -128,7 +128,7 @@ mod tests {
     fn rejects_invalid_regex() {
         assert!(matches!(
             parse_query("(unclosed").unwrap_err(),
-            QueryParseError::Regex(_)
+            QueryParseError::UserRegex(_)
         ));
     }
 
