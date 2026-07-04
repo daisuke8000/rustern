@@ -58,7 +58,17 @@ impl PodMetaCache {
         };
         let snapshot = pod_meta_snapshot_from_pod(pod);
         let shard = shard_index(&locator);
-        let mut cache = self.inner[shard].write().await;
+        let shard_lock = &self.inner[shard];
+        {
+            let cache = shard_lock.read().await;
+            if cache.get(&locator).is_some_and(|prev| prev == &snapshot) {
+                return;
+            }
+        }
+        let mut cache = shard_lock.write().await;
+        if cache.get(&locator).is_some_and(|prev| prev == &snapshot) {
+            return;
+        }
         cache.insert(locator, snapshot);
     }
 
@@ -268,13 +278,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_from_pod_is_idempotent_for_unchanged_snapshot() {
+        let cache = PodMetaCache::new();
+        let pod = test_pod();
+        cache.update_from_pod(&context(), &pod).await;
+        cache.update_from_pod(&context(), &pod).await;
+
+        let key = SourceKey {
+            context: context(),
+            namespace: "ns".into(),
+            pod: "pod-a".into(),
+            container: "app".into(),
+            uid: "uid-1".into(),
+        };
+        let snap = cache.lookup(&key).await;
+        assert_eq!(snap.node.as_deref(), Some("worker-3"));
+    }
+
+    #[tokio::test]
+    async fn update_from_pod_refreshes_when_labels_change() {
+        let cache = PodMetaCache::new();
+        let mut pod = test_pod();
+        cache.update_from_pod(&context(), &pod).await;
+
+        pod.metadata
+            .labels
+            .as_mut()
+            .expect("labels")
+            .insert("tier".into(), "worker".into());
+        cache.update_from_pod(&context(), &pod).await;
+
+        let key = SourceKey {
+            context: context(),
+            namespace: "ns".into(),
+            pod: "pod-a".into(),
+            container: "app".into(),
+            uid: "uid-1".into(),
+        };
+        let snap = cache.lookup(&key).await;
+        assert_eq!(
+            snap.labels.0.get("tier").map(String::as_str),
+            Some("worker")
+        );
+    }
+
+    #[tokio::test]
     async fn attach_deps_uses_pod_meta_cache() {
         let fixture = TestOrchestratorBuilder::new().build();
         let pod = test_pod();
         fixture
             .attach
             .pod_meta
-            .update_from_pod(&fixture.admission.context_name(), &pod)
+            .update_from_pod(fixture.admission.context_name(), &pod)
             .await;
 
         let key = SourceKey {
