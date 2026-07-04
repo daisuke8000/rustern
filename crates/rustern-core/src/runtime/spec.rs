@@ -276,7 +276,9 @@ mod tests {
         let token = CancellationToken::new();
         let raw = r#"{"level":"error","msg":"boom"}"#;
         let mut event = ev(raw);
-        event.structured = Some(serde_json::from_str(raw).unwrap());
+        event.structured = Some(crate::source::ParsedJson::Serde(
+            serde_json::from_str(raw).unwrap(),
+        ));
 
         let spec = PipelineSpecBuilder::new()
             .with_level_key(Some("level".into()))
@@ -321,7 +323,9 @@ mod tests {
         let token = CancellationToken::new();
         let raw = r#"{"level":"error","msg":"hidden"}"#;
         let mut event = ev(raw);
-        event.structured = Some(serde_json::from_str(raw).unwrap());
+        event.structured = Some(crate::source::ParsedJson::Serde(
+            serde_json::from_str(raw).unwrap(),
+        ));
 
         let spec = PipelineSpecBuilder::new()
             .with_includes(vec![Regex::new("visible").unwrap()])
@@ -343,7 +347,9 @@ mod tests {
         let token = CancellationToken::new();
         let raw = r#"{"level":"error","msg":"boom"}"#;
         let mut event = ev(raw);
-        event.structured = Some(serde_json::from_str(raw).unwrap());
+        event.structured = Some(crate::source::ParsedJson::Serde(
+            serde_json::from_str(raw).unwrap(),
+        ));
 
         let spec = PipelineSpecBuilder::new()
             .with_level_key(Some("level".into()))
@@ -364,7 +370,9 @@ mod tests {
         let token = CancellationToken::new();
         let raw = r#"{"level":"error","msg":"visible line"}"#;
         let mut event = ev(raw);
-        event.structured = Some(serde_json::from_str(raw).unwrap());
+        event.structured = Some(crate::source::ParsedJson::Serde(
+            serde_json::from_str(raw).unwrap(),
+        ));
 
         let spec = PipelineSpecBuilder::new()
             .with_includes(vec![Regex::new("^\\{").unwrap()])
@@ -390,7 +398,9 @@ mod tests {
         let token = CancellationToken::new();
         let raw = r#"{"trigger":"secret","msg":"visible payload"}"#;
         let mut event = ev(raw);
-        event.structured = Some(serde_json::from_str(raw).unwrap());
+        event.structured = Some(crate::source::ParsedJson::Serde(
+            serde_json::from_str(raw).unwrap(),
+        ));
 
         let spec = PipelineSpecBuilder::new()
             .with_includes(vec![Regex::new("visible").unwrap()])
@@ -423,7 +433,9 @@ mod tests {
         let token = CancellationToken::new();
         let raw = r#"{"msg":"visible line"}"#;
         let mut event = ev(raw);
-        event.structured = Some(serde_json::from_str(raw).unwrap());
+        event.structured = Some(crate::source::ParsedJson::Serde(
+            serde_json::from_str(raw).unwrap(),
+        ));
 
         let spec = PipelineSpecBuilder::new()
             .with_includes(vec![Regex::new("\"visible").unwrap()])
