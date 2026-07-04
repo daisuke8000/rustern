@@ -277,6 +277,13 @@ fn validate_rejects_oversized_include_regex() {
 }
 
 #[test]
+fn only_log_lines_flag_is_documented_no_op() {
+    let cli = cli_with_default_ns(&["--only-log-lines", "q"]);
+    cli.validate().unwrap();
+    assert!(cli.only_log_lines);
+}
+
+#[test]
 fn cursor_reconnect_flag_parses() {
     let cli = cli_with_default_ns(&["--cursor-reconnect", "q"]);
     cli.validate().unwrap();
