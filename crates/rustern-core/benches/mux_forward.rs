@@ -5,21 +5,40 @@ use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use futures::stream;
 use rustern_core::pipeline::ExitWatchState;
-use rustern_core::render::RenderCommand;
+use rustern_core::render::default_renderer::DefaultLineFormatter;
+use rustern_core::render::{RenderCommand, flush_ticker, render_task};
 use rustern_core::runtime::{
     BackpressurePolicy, LossyMetrics, MuxCmd, MuxMetrics, PipelineSpecBuilder, RuntimeFwdConfig,
     forward_to_render, spawn_mux_task,
 };
 use rustern_core::source::{ContextName, Labels, LogEvent, SourceKey, SourceKind, SourceMeta};
+use rustern_core::{TimestampStyle, TimestampZone};
+use tokio::io::AsyncReadExt;
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 const BATCH: u64 = 2_000;
+const LINES_PER_STREAM: usize = 32;
+const MATRIX_STREAMS: [usize; 4] = [1, 16, 128, 512];
 const RAW_BUFFER: usize = 4_096;
 const TIERED_RAW_BUFFER: usize = 64;
 const RENDER_BUFFER: usize = 4_096;
+const SLOW_RENDER_BUFFER: usize = 4;
+const SLOW_CONSUMER_DELAY: Duration = Duration::from_micros(50);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsumerMode {
+    Unbounded,
+    Slow,
+}
+
+struct MatrixRun {
+    delivered: usize,
+    mux_drops: u64,
+    forward_drops: u64,
+}
 
 fn fwd_cfg(lossy: bool) -> RuntimeFwdConfig {
     RuntimeFwdConfig {
@@ -352,11 +371,309 @@ fn bench_mux_tiered_policy(c: &mut Criterion) {
     group.finish();
 }
 
+async fn drain_render_consumer(
+    mut render_rx: mpsc::Receiver<RenderCommand>,
+    mode: ConsumerMode,
+    expected: usize,
+) -> usize {
+    let mut received = 0usize;
+    while received < expected {
+        let Some(cmd) = render_rx.recv().await else {
+            break;
+        };
+        if matches!(cmd, RenderCommand::Line(_)) {
+            received += 1;
+            if mode == ConsumerMode::Slow {
+                tokio::time::sleep(SLOW_CONSUMER_DELAY).await;
+            }
+        }
+    }
+    received
+}
+
+async fn run_multistream_matrix(
+    streams: usize,
+    consumer: ConsumerMode,
+    policy: BackpressurePolicy,
+    lossy_forward: bool,
+) -> MatrixRun {
+    let total_lines = streams.saturating_mul(LINES_PER_STREAM);
+    let render_buffer = match consumer {
+        ConsumerMode::Unbounded => RENDER_BUFFER,
+        ConsumerMode::Slow => SLOW_RENDER_BUFFER,
+    };
+    let raw_buffer = if policy == BackpressurePolicy::Lossy && consumer == ConsumerMode::Slow {
+        TIERED_RAW_BUFFER
+    } else {
+        RAW_BUFFER
+    };
+
+    let (mux_tx, mux_rx) = mpsc::channel(256);
+    let (raw_tx, raw_rx) = mpsc::channel(raw_buffer);
+    let (render_tx, render_rx) = mpsc::channel(render_buffer);
+    let token = CancellationToken::new();
+    let mux_metrics = MuxMetrics::new(None);
+    let forward_metrics = LossyMetrics::new(None);
+    let mux_h = spawn_mux_task(
+        mux_rx,
+        raw_tx,
+        None,
+        policy,
+        mux_metrics.clone(),
+        token.clone(),
+    );
+    let pipe_stream = PipelineSpecBuilder::new()
+        .build(ExitWatchState::new(token.clone()))
+        .apply(ReceiverStream::new(raw_rx));
+    let fwd_h = tokio::spawn(forward_to_render(
+        pipe_stream,
+        render_tx.clone(),
+        fwd_cfg(lossy_forward),
+        forward_metrics.clone(),
+        token.clone(),
+    ));
+
+    for s in 0..streams {
+        let events: Vec<_> = (0..LINES_PER_STREAM)
+            .map(|i| Ok(sample_event(s * LINES_PER_STREAM + i)))
+            .collect();
+        mux_tx
+            .send(MuxCmd::Add(
+                sample_key(s),
+                Box::pin(stream::iter(events.into_iter())),
+            ))
+            .await
+            .expect("mux add");
+    }
+
+    let drain_h = tokio::spawn(drain_render_consumer(render_rx, consumer, total_lines));
+    drop(mux_tx);
+    mux_h.await.expect("mux task");
+    token.cancel();
+    fwd_h.await.expect("forward task");
+    let delivered = drain_h.await.expect("render drain");
+
+    MatrixRun {
+        delivered,
+        mux_drops: mux_metrics.mux_drop_count(),
+        forward_drops: forward_metrics.drop_count(),
+    }
+}
+
+fn bench_multistream_matrix(c: &mut Criterion) {
+    let rt = Runtime::new().expect("tokio runtime");
+    let mut group = c.benchmark_group("multistream_matrix");
+    group.sample_size(10);
+
+    for streams in MATRIX_STREAMS {
+        let total = (streams * LINES_PER_STREAM) as u64;
+        group.throughput(Throughput::Elements(total));
+
+        for consumer in [ConsumerMode::Unbounded, ConsumerMode::Slow] {
+            for policy in [BackpressurePolicy::Blocking, BackpressurePolicy::Lossy] {
+                let lossy_forward = policy == BackpressurePolicy::Lossy;
+                let id = BenchmarkId::from_parameter(format!(
+                    "streams={streams}/consumer={consumer:?}/policy={policy:?}"
+                ));
+                group.bench_with_input(id, &(), |b, _| {
+                    b.iter(|| {
+                        let run = rt.block_on(run_multistream_matrix(
+                            streams,
+                            consumer,
+                            policy,
+                            lossy_forward,
+                        ));
+                        if policy == BackpressurePolicy::Blocking
+                            && consumer == ConsumerMode::Unbounded
+                        {
+                            assert_eq!(
+                                run.delivered,
+                                streams.saturating_mul(LINES_PER_STREAM),
+                                "blocking unbounded consumer should deliver all lines"
+                            );
+                        }
+                        black_box((run.delivered, run.mux_drops, run.forward_drops));
+                    });
+                });
+            }
+        }
+    }
+
+    group.finish();
+}
+
+async fn run_render_task_sink(lines: usize) -> usize {
+    let formatter = Arc::new(DefaultLineFormatter {
+        timestamp_style: TimestampStyle::Omit,
+        timestamp_zone: TimestampZone::Utc,
+        color_enabled: false,
+        pod_colors: false,
+        container_colors: false,
+    });
+    let (render_tx, render_rx) = mpsc::channel(RENDER_BUFFER);
+    let sink = tokio::io::sink();
+    let render_h = tokio::spawn(render_task(render_rx, sink, formatter));
+
+    for i in 0..lines {
+        render_tx
+            .send(RenderCommand::Line(sample_event(i)))
+            .await
+            .expect("render send");
+    }
+    render_tx
+        .send(RenderCommand::Shutdown)
+        .await
+        .expect("render shutdown");
+    render_h.await.expect("render task").expect("render io");
+    lines
+}
+
+async fn run_render_task_duplex(lines: usize) -> usize {
+    let formatter = Arc::new(DefaultLineFormatter {
+        timestamp_style: TimestampStyle::Omit,
+        timestamp_zone: TimestampZone::Utc,
+        color_enabled: false,
+        pod_colors: false,
+        container_colors: false,
+    });
+    let (mut rd, wr) = tokio::io::duplex(16_384);
+    let (render_tx, render_rx) = mpsc::channel(RENDER_BUFFER);
+    let token = CancellationToken::new();
+    let render_h = tokio::spawn(render_task(render_rx, wr, formatter));
+    let _flush_h = tokio::spawn(flush_ticker(
+        render_tx.clone(),
+        token.clone(),
+        Duration::from_millis(50),
+    ));
+
+    for i in 0..lines {
+        render_tx
+            .send(RenderCommand::Line(sample_event(i)))
+            .await
+            .expect("render send");
+    }
+    render_tx
+        .send(RenderCommand::Shutdown)
+        .await
+        .expect("render shutdown");
+    render_h.await.expect("render task").expect("render io");
+    token.cancel();
+
+    let mut buf = vec![0u8; 256];
+    let mut read_total = 0usize;
+    loop {
+        match rd.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => read_total += n,
+            Err(_) => break,
+        }
+    }
+    read_total
+}
+
+async fn run_mux_render_task_e2e(lines: usize, sink: bool) -> usize {
+    let formatter = Arc::new(DefaultLineFormatter {
+        timestamp_style: TimestampStyle::Omit,
+        timestamp_zone: TimestampZone::Utc,
+        color_enabled: false,
+        pod_colors: false,
+        container_colors: false,
+    });
+    let (mux_tx, mux_rx) = mpsc::channel(256);
+    let (raw_tx, raw_rx) = mpsc::channel(RAW_BUFFER);
+    let (render_tx, render_rx) = mpsc::channel(RENDER_BUFFER);
+    let token = CancellationToken::new();
+    let fwd_h = tokio::spawn(forward_to_render(
+        ReceiverStream::new(raw_rx),
+        render_tx.clone(),
+        fwd_cfg(false),
+        LossyMetrics::new(None),
+        token.clone(),
+    ));
+    let mux_h = spawn_blocking_mux(mux_rx, raw_tx);
+    let events: Vec<_> = (0..lines).map(|i| Ok(sample_event(i))).collect();
+    mux_tx
+        .send(MuxCmd::Add(
+            sample_key(0),
+            Box::pin(stream::iter(events.into_iter())),
+        ))
+        .await
+        .expect("mux add");
+
+    let render_h = if sink {
+        let sink = tokio::io::sink();
+        tokio::spawn(render_task(render_rx, sink, formatter))
+    } else {
+        let (mut rd, wr) = tokio::io::duplex(16_384);
+        let h = tokio::spawn(render_task(render_rx, wr, formatter));
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 512];
+            loop {
+                match rd.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        });
+        h
+    };
+
+    drop(mux_tx);
+    mux_h.await.expect("mux task");
+    token.cancel();
+    fwd_h.await.expect("forward task");
+    render_tx
+        .send(RenderCommand::Shutdown)
+        .await
+        .expect("render shutdown");
+    render_h.await.expect("render task").expect("render io");
+    lines
+}
+
+fn bench_render_task(c: &mut Criterion) {
+    let rt = Runtime::new().expect("tokio runtime");
+    let lines = BATCH as usize;
+
+    let mut sink_group = c.benchmark_group("render_task_sink");
+    sink_group.throughput(Throughput::Elements(BATCH));
+    sink_group.bench_function("direct", |b| {
+        b.iter(|| {
+            let count = rt.block_on(run_render_task_sink(lines));
+            assert_eq!(count, lines);
+        });
+    });
+    sink_group.finish();
+
+    let mut duplex_group = c.benchmark_group("render_task_duplex");
+    duplex_group.throughput(Throughput::Elements(BATCH));
+    duplex_group.bench_function("with_flush_ticker", |b| {
+        b.iter(|| {
+            let nbytes = rt.block_on(run_render_task_duplex(lines));
+            black_box(nbytes);
+        });
+    });
+    duplex_group.finish();
+
+    let mut e2e_group = c.benchmark_group("mux_render_task_e2e");
+    e2e_group.throughput(Throughput::Elements(BATCH));
+    for (name, sink) in [("sink", true), ("duplex", false)] {
+        e2e_group.bench_with_input(BenchmarkId::new("writer", name), &sink, |b, &sink| {
+            b.iter(|| {
+                let count = rt.block_on(run_mux_render_task_e2e(lines, sink));
+                assert_eq!(count, lines);
+            });
+        });
+    }
+    e2e_group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mux_drain,
     bench_mux_forward,
     bench_mux_pipeline_forward,
-    bench_mux_tiered_policy
+    bench_mux_tiered_policy,
+    bench_multistream_matrix,
+    bench_render_task
 );
 criterion_main!(benches);
