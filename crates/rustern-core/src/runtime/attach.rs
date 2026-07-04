@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::cursor_store::{CursorUpdate, ReconnectCursorStore, pod_log_request_for_reopen};
@@ -257,6 +257,10 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
             }
         }
     }
+}
+
+pub fn build_log_request_semaphore(max: usize) -> Arc<Semaphore> {
+    Arc::new(Semaphore::new(max.max(1)))
 }
 
 pub(crate) fn spawn_attach_pod_log(

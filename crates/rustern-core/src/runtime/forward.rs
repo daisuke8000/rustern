@@ -1,4 +1,4 @@
-//! Forward to renderer, backpressure metrics, concurrent log stream semaphore.
+//! Forward to renderer and backpressure metrics.
 //!
 //! ## Backpressure metrics
 //!
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use futures::Stream;
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{Mutex, Semaphore, mpsc};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::config::{BackpressurePolicy, RuntimeFwdConfig};
@@ -292,10 +292,6 @@ pub async fn forward_to_render(
             }
         }
     }
-}
-
-pub fn build_log_request_semaphore(max: usize) -> Arc<Semaphore> {
-    Arc::new(Semaphore::new(max.max(1)))
 }
 
 #[cfg(test)]
