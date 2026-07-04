@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 
 use super::attach::{build_log_request_semaphore, spawn_attach_pod_log};
 use super::config::{CoreRunConfig, RunError, RunOutcome};
-use super::cursor_store::{CursorUpdate, ReconnectCursorStore, run_cursor_update_processor};
+use super::cursor_service::CursorService;
 use super::list_pods::list_pods_paginated;
 use super::mux_forward_core::MuxForwardCore;
 use super::pod_meta_cache::PodMetaCache;
@@ -157,13 +157,7 @@ pub async fn run_with_client(
     let stats_rep_h = core.stats_rep_h;
     let flush_h = core.flush_h;
 
-    let reconnect_cursor = ReconnectCursorStore::new();
-    let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel::<CursorUpdate>();
-    let cursor_h = tokio::spawn(run_cursor_update_processor(
-        cursor_update_rx,
-        reconnect_cursor.clone(),
-        cfg.root_token.clone(),
-    ));
+    let (cursor, cursor_h) = CursorService::spawn(cfg.cursor_reconnect, cfg.root_token.clone());
 
     let watch_ctx = Arc::new(PodWatchCtx {
         admission,
@@ -171,9 +165,7 @@ pub async fn run_with_client(
             log_opener: Arc::new(PodLogSourceOpener::new(client)),
             root_child: cfg.root_token.clone(),
             pod_log: cfg.pod_log.clone(),
-            cursor_reconnect: cfg.cursor_reconnect,
-            reconnect_cursor,
-            cursor_update_tx,
+            cursor,
             sem,
             mux_tx: mux_tx.clone(),
             follow_limit_notifier,
