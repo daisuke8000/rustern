@@ -36,10 +36,19 @@ impl CursorService {
     pub(crate) fn spawn(
         enabled: bool,
         token: CancellationToken,
-    ) -> (Self, tokio::task::JoinHandle<()>) {
+    ) -> (Self, Option<tokio::task::JoinHandle<()>>) {
         let store = ReconnectCursorStore::new();
         let (update_tx, update_rx) = mpsc::unbounded_channel();
-        let handle = tokio::spawn(run_cursor_update_processor(update_rx, store.clone(), token));
+        let handle = if enabled {
+            Some(tokio::spawn(run_cursor_update_processor(
+                update_rx,
+                store.clone(),
+                token,
+            )))
+        } else {
+            drop(update_rx);
+            None
+        };
         (
             Self {
                 store,
@@ -48,6 +57,11 @@ impl CursorService {
             },
             handle,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn last_timestamp(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
+        self.store.get(key).await
     }
 
     pub(crate) fn should_reconnect(&self) -> bool {
@@ -335,13 +349,14 @@ mod tests {
 
         drop(cursor);
         token.cancel();
-        processor.await.expect("processor");
+        processor.expect("processor").await.expect("processor");
     }
 
     #[tokio::test]
     async fn disabled_service_passthrough_without_reopen() {
         let token = CancellationToken::new();
         let (cursor, processor) = CursorService::spawn(false, token.clone());
+        assert!(processor.is_none());
         assert!(!cursor.should_reconnect());
 
         let base = PodLogRequest {
@@ -355,6 +370,5 @@ mod tests {
         assert_eq!(req.tail, Some(25));
 
         token.cancel();
-        processor.await.expect("processor");
     }
 }

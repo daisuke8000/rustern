@@ -262,4 +262,87 @@ mod tests {
         assert_eq!(meta.node.as_deref(), Some("worker-1"));
         assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn follow_without_cursor_reconnect_skips_tracking_and_reopen() {
+        use std::sync::Arc;
+
+        use chrono::{TimeZone, Utc};
+        use futures::StreamExt;
+        use tokio::sync::mpsc;
+
+        use crate::source::log_opener::ScriptLogSourceOpener;
+        use crate::source::pod_log::PodLogRequest;
+        use crate::source::{LogEvent, SourceKind, SourceMeta};
+
+        let key = sample_key();
+        let base_meta = SourceMeta {
+            context: key.context.clone(),
+            namespace: key.namespace.clone(),
+            pod: key.pod.clone(),
+            container: key.container.clone(),
+            kind: SourceKind::PodLog,
+            node: None,
+            labels: Arc::new(crate::source::Labels::default()),
+            uid: key.uid.clone(),
+        };
+        let ts1 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
+        let ts2 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 6).unwrap();
+        let ev1 = LogEvent {
+            source: Arc::new(base_meta.clone()),
+            timestamp: ts1,
+            message: Arc::from("first"),
+            structured: None,
+            level: None,
+            palette_index: None,
+            container_palette_index: None,
+        };
+        let ev2 = LogEvent {
+            source: Arc::new(base_meta),
+            timestamp: ts2,
+            message: Arc::from("second"),
+            structured: None,
+            level: None,
+            palette_index: None,
+            container_palette_index: None,
+        };
+
+        let (mux_tx, mut mux_rx) = mpsc::channel(8);
+        let pod_token = CancellationToken::new();
+        let fixture = TestOrchestratorBuilder::new()
+            .mux_tx(mux_tx)
+            .pod_log(PodLogRequest {
+                follow: true,
+                ..Default::default()
+            })
+            .cursor_reconnect(false)
+            .sem_permits(8)
+            .log_opener(ScriptLogSourceOpener::new(vec![
+                vec![Ok(ev1)],
+                vec![Ok(ev2)],
+            ]))
+            .build();
+        let ctx = fixture.arc();
+
+        spawn_attach_pod_log(&ctx, key.clone(), pod_token.clone());
+
+        let Some(MuxCmd::Add(_, first_stream)) = mux_rx.recv().await else {
+            panic!("missing first attach");
+        };
+        let first_events: Vec<_> = first_stream.collect().await;
+        assert_eq!(first_events.len(), 1);
+        assert_eq!(&*first_events[0].as_ref().unwrap().message, "first");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), mux_rx.recv())
+                .await
+                .is_err(),
+            "cursor reconnect disabled: must not reopen after EOF"
+        );
+        assert!(
+            ctx.attach.cursor.last_timestamp(&key).await.is_none(),
+            "cursor store must stay empty without tracking"
+        );
+
+        pod_token.cancel();
+    }
 }

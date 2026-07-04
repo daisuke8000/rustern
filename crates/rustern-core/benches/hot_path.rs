@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const BATCH: u64 = 1_000;
+const CURSOR_BATCH: u64 = 2_000;
 
 fn plain_message_256() -> String {
     "GET /api/v1/widgets?page=1&limit=50 HTTP/1.1 200 OK upstream latency=42ms trace_id=abc123def456 user_agent=rustern-bench/0.1 request_size=512 response_size=2048 cache=miss region=us-west-2 pod=frontend-7d8f9c-xk2m9 container=app extra_padding=0123456789"
@@ -427,10 +428,10 @@ where
 fn bench_cursor_tracking_ab(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let mut group = c.benchmark_group("cursor_tracking_ab");
-    group.throughput(Throughput::Elements(BATCH));
+    group.throughput(Throughput::Elements(CURSOR_BATCH));
 
     let msg = plain_message_256();
-    let batch = event_batch(&msg);
+    let batch: Vec<LogEvent> = (0..CURSOR_BATCH).map(|_| sample_event(&msg)).collect();
     let key = SourceKey {
         context: ContextName("ctx".into()),
         namespace: "default".into(),
