@@ -1,4 +1,4 @@
-use regex::Regex;
+use rustern_core::compile_user_regex;
 use rustern_core::{ContextSelector, TimestampZone};
 
 use super::Cli;
@@ -61,23 +61,23 @@ impl Cli {
             );
         }
         for p in &self.exclude_pod {
-            Regex::new(p).map_err(|e| format!("invalid --exclude-pod regex: {e}"))?;
+            compile_user_regex("--exclude-pod", p)?;
         }
         for p in &self.exclude_container {
-            Regex::new(p).map_err(|e| format!("invalid --exclude-container regex: {e}"))?;
+            compile_user_regex("--exclude-container", p)?;
         }
         for p in &self.include {
-            Regex::new(p).map_err(|e| format!("invalid --include regex: {e}"))?;
+            compile_user_regex("--include", p)?;
         }
         for p in &self.exclude {
-            Regex::new(p).map_err(|e| format!("invalid --exclude regex: {e}"))?;
+            compile_user_regex("--exclude", p)?;
         }
-        Regex::new(&self.container).map_err(|e| format!("invalid --container regex: {e}"))?;
+        compile_user_regex("--container", &self.container)?;
         for p in &self.highlight {
-            Regex::new(p).map_err(|e| format!("invalid --highlight regex: {e}"))?;
+            compile_user_regex("--highlight", p)?;
         }
         for p in &self.exit_on {
-            Regex::new(p).map_err(|e| format!("invalid --exit-on regex: {e}"))?;
+            compile_user_regex("--exit-on", p)?;
         }
         if let Some(ref expr) = self.json_query {
             rustern_core::validate_filter(expr).map_err(|e| e.to_string())?;

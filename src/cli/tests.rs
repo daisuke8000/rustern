@@ -268,6 +268,15 @@ fn previous_flag_parses() {
 }
 
 #[test]
+fn validate_rejects_oversized_include_regex() {
+    use rustern_core::MAX_USER_REGEX_PATTERN_LEN;
+    let long = "a".repeat(MAX_USER_REGEX_PATTERN_LEN + 1);
+    let cli = cli_with_default_ns(&["--include", &long, "q"]);
+    let err = cli.validate().unwrap_err();
+    assert!(err.contains("exceeds"));
+}
+
+#[test]
 fn cursor_reconnect_flag_parses() {
     let cli = cli_with_default_ns(&["--cursor-reconnect", "q"]);
     cli.validate().unwrap();
