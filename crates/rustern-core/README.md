@@ -114,7 +114,7 @@ flowchart TD
     style Legend fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
 ```
 
-`runtime::run` references `discovery/context`, `discovery/resource`, and `discovery/pod_list`. Container key discovery and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
+`runtime::run` references `discovery/context`, `discovery/resource`, `discovery/pod_list`, `discovery/container_keys`, and `discovery/pod_reconcile`. Container key discovery and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
 
 ### Layers explained
 
