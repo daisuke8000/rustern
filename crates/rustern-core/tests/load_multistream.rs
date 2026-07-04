@@ -15,8 +15,8 @@ use rustern_core::pipeline::ExitWatchState;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{LineFormatter, RenderCommand, flush_ticker};
 use rustern_core::runtime::{
-    BackpressurePolicy, LossyMetrics, MuxCmd, MuxMetrics, PipelineSpecBuilder, RuntimeFwdConfig,
-    forward_to_render, spawn_mux_task,
+    BackpressurePolicy, LossyMetrics, MuxCmd, MuxForwardCore, MuxMetrics, PipelineSpecBuilder,
+    RunStats, RuntimeFwdConfig, forward_to_render, spawn_mux_task,
 };
 use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{
@@ -352,6 +352,78 @@ async fn run_pipeline_render_load(
     )
 }
 
+async fn run_production_core_load() -> (u64, u64) {
+    let scale = load_scale();
+    let expected = (scale.pods * scale.lines_per_pod) as u64;
+
+    let (mock, mut handle) =
+        tower_test::mock::pair::<Request<kube::client::Body>, Response<kube::client::Body>>();
+    let pods = scale.pods;
+    let lines_per_pod = scale.lines_per_pod;
+    let server = tokio::spawn(async move {
+        for p in 0..pods {
+            let (_req, send) = handle.next_request().await.expect("mock log request");
+            let body = log_body(&format!("pod-{p}"), lines_per_pod);
+            let resp = Response::builder()
+                .status(StatusCode::OK)
+                .body(kube::client::Body::from(body.into_bytes()))
+                .unwrap();
+            send.send_response(resp);
+        }
+    });
+
+    let token = CancellationToken::new();
+    let streams = connect_mock_sources(mock, pods, token.clone()).await;
+
+    let fwd_cfg = RuntimeFwdConfig {
+        buffer_size: BLOCKING_RENDER_BUFFER,
+        lossy: false,
+        mux_policy: BackpressurePolicy::Blocking,
+        stats: None,
+        max_log_requests: pods,
+    };
+    let stats = RunStats::from_fwd(&fwd_cfg);
+    let pipeline = PipelineSpecBuilder::new().build(ExitWatchState::new(token.clone()));
+    let core = MuxForwardCore::spawn(pipeline, fwd_cfg, None, token.clone(), Some(stats.clone()));
+    let render_rx = core
+        .render_rx
+        .expect("load test drains render channel directly");
+    let mux_tx = core.mux_tx;
+    let render_tx = core.render_tx;
+    let mux_h = core.mux_h;
+    let forward_h = core.pipe_h;
+
+    let fmt = Arc::new(DefaultLineFormatter {
+        timestamp_style: rustern_core::TimestampStyle::Omit,
+        timestamp_zone: rustern_core::TimestampZone::Utc,
+        color_enabled: false,
+        pod_colors: false,
+        container_colors: false,
+    });
+    let render_h = tokio::spawn(async move { count_render_lines(render_rx, expected, fmt).await });
+
+    tokio::task::yield_now().await;
+
+    for (key, stream) in streams {
+        mux_add(&mux_tx, key, stream).await;
+    }
+
+    let delivered = timeout(recv_deadline(), render_h)
+        .await
+        .unwrap_or_else(|_| panic!("render count timed out after {:?}", recv_deadline()))
+        .expect("render task panicked");
+    let snapshot = stats.snapshot_and_reset();
+
+    drop(mux_tx);
+    token.cancel();
+    let _ = render_tx.send(RenderCommand::Shutdown).await;
+    join_with_deadline("forward", forward_h).await;
+    join_with_deadline("mux", mux_h).await;
+    join_with_deadline("mock_log_server", server).await;
+
+    (delivered, snapshot.forwarded_lines)
+}
+
 async fn run_mux_lossy_load(raw_buffer: usize) -> u64 {
     let scale = load_scale();
     let (mock, mut handle) =
@@ -459,6 +531,25 @@ async fn lossy_drops_when_render_backpressured() {
             assert!(
                 delivered < expected,
                 "backpressure should prevent full delivery in lossy mode"
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn production_core_renders_all_multistream_lines_with_stats() {
+    with_deadline(
+        "production_core_renders_all_multistream_lines_with_stats",
+        TEST_HARD_LIMIT,
+        async {
+            let scale = load_scale();
+            let expected = (scale.pods * scale.lines_per_pod) as u64;
+            let (delivered, stats_forwarded) = run_production_core_load().await;
+            assert_eq!(delivered, expected, "all lines should reach render");
+            assert_eq!(
+                stats_forwarded, expected,
+                "RunStats mirror should count every forwarded line"
             );
         },
     )
