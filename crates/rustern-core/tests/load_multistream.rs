@@ -595,3 +595,19 @@ async fn multi_tier_lossy_distributes_drops() {
     )
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn matrix_blocking_unbounded_smoke() {
+    // CI-friendly slice of the DSK-99 multistream matrix (16 streams, blocking, fast consumer).
+    with_deadline("matrix_blocking_unbounded_smoke", TEST_HARD_LIMIT, async {
+        let pods = 16usize;
+        let lines_per_pod = 8usize;
+        let expected = (pods * lines_per_pod) as u64;
+        let got = run_mux_raw_load(pods, lines_per_pod).await;
+        assert_eq!(
+            got, expected,
+            "16-stream blocking mux should forward every line (matrix smoke)"
+        );
+    })
+    .await;
+}
