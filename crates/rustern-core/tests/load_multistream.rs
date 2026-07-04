@@ -412,12 +412,12 @@ async fn run_production_core_load() -> (u64, u64) {
         .await
         .unwrap_or_else(|_| panic!("render count timed out after {:?}", recv_deadline()))
         .expect("render task panicked");
-    let snapshot = stats.snapshot_and_reset();
 
     drop(mux_tx);
     token.cancel();
     let _ = render_tx.send(RenderCommand::Shutdown).await;
     join_with_deadline("forward", forward_h).await;
+    let snapshot = stats.snapshot_and_reset();
     join_with_deadline("mux", mux_h).await;
     join_with_deadline("mock_log_server", server).await;
 
