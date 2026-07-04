@@ -389,7 +389,6 @@ async fn run_production_core_load() -> (u64, u64) {
         .render_rx
         .expect("load test drains render channel directly");
     let mux_tx = core.mux_tx;
-    let render_tx = core.render_tx;
     let mux_h = core.mux_h;
     let forward_h = core.pipe_h;
 
