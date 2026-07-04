@@ -316,6 +316,27 @@ fn bench_parse_log_line(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_ingest_log_line(c: &mut Criterion) {
+    use rustern_core::parse_log_line_bytes;
+
+    let mut group = c.benchmark_group("ingest_log_line");
+
+    for (name, msg) in [
+        ("plain_256", plain_message_256()),
+        ("json_4k", json_message_4k()),
+    ] {
+        let mut buf = kube_log_line(&msg).into_bytes();
+        buf.push(b'\n');
+        group.bench_with_input(BenchmarkId::new("buffer_to_event", name), &buf, |b, buf| {
+            b.iter(|| {
+                let (ts, message) = parse_log_line_bytes(black_box(buf.as_slice()));
+                black_box((ts, message));
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Mirrors production cursor-tracking stream poll overhead for A/B comparison
 /// without attach/mux wiring (see DSK-97 / benches README).
 struct BenchCursorTrackingStream<S> {
@@ -412,6 +433,7 @@ criterion_group!(
     bench_highlight_formatter,
     bench_pipeline_spec_apply,
     bench_parse_log_line,
+    bench_ingest_log_line,
     bench_cursor_tracking_ab,
 );
 criterion_main!(benches);

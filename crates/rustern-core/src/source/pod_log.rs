@@ -1,17 +1,16 @@
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::AsyncBufRead;
-use futures::StreamExt;
-use futures::io::{AsyncBufReadExt, BufReader};
+use futures::io::AsyncBufReadExt;
 use jiff::Timestamp;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::LogParams;
 use kube::{Api, Client};
 use tokio_util::sync::CancellationToken;
 
+use super::retry::{full_jitter_backoff, kube_error_is_client_error};
 use super::{BoxedLogStream, LogEvent, LogSource, LogSourceError, SourceMeta};
 
 /// Kubernetes log subresource knobs (maps to [`LogParams`]).
@@ -95,18 +94,23 @@ impl PodLogSource {
         let api: Api<Pod> = Api::namespaced(client, &meta.namespace);
         let params = build_log_params(meta.as_ref(), &req);
         let reader = log_stream_with_retry(&api, &meta.pod, &params, 3).await?;
-        let reader = BufReader::new(reader);
-        let lines = reader.lines();
 
         let meta_arc = Arc::clone(&meta);
         let stream = futures::stream::unfold(
-            (lines, meta_arc, token.clone()),
-            |(mut lines, meta, token)| async move {
+            (reader, meta_arc, token.clone(), Vec::new(), false),
+            |(mut reader, meta, token, mut buf, done)| async move {
+                if done {
+                    return None;
+                }
                 tokio::select! {
                     _ = token.cancelled() => None,
-                    line = lines.next() => match line {
-                        Some(Ok(raw)) => {
-                            let (ts, msg) = parse_log_line(&raw);
+                    read = async {
+                        buf.clear();
+                        reader.read_until(b'\n', &mut buf).await
+                    } => match read {
+                        Ok(0) => None,
+                        Ok(_) => {
+                            let (ts, msg) = parse_log_line_bytes(&buf);
                             let ev = LogEvent {
                                 source: meta.clone(),
                                 timestamp: ts,
@@ -116,13 +120,12 @@ impl PodLogSource {
                                 palette_index: None,
                                 container_palette_index: None,
                             };
-                            Some((Ok(ev), (lines, meta, token)))
+                            Some((Ok(ev), (reader, meta, token, buf, false)))
                         }
-                        Some(Err(e)) => Some((
+                        Err(e) => Some((
                             Err(LogSourceError::Api(e.to_string())),
-                            (lines, meta, token),
+                            (reader, meta, token, buf, true),
                         )),
-                        None => None,
                     },
                 }
             },
@@ -143,10 +146,12 @@ async fn log_stream_with_retry(
     max_attempts: u32,
 ) -> Result<Pin<Box<dyn AsyncBufRead + Send>>, LogSourceError> {
     let mut attempt: u32 = 0;
-    let mut backoff_ms: u64 = 200;
     loop {
         match api.log_stream(pod, params).await {
             Ok(s) => return Ok(Box::pin(s)),
+            Err(e) if kube_error_is_client_error(&e) => {
+                return Err(LogSourceError::Api(e.to_string()));
+            }
             Err(e) if attempt + 1 >= max_attempts => {
                 return Err(LogSourceError::Api(format!(
                     "after {} attempts: {}",
@@ -155,22 +160,50 @@ async fn log_stream_with_retry(
             }
             Err(e) => {
                 tracing::warn!(error = %e, attempt, "log_stream failed, retrying");
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                tokio::time::sleep(full_jitter_backoff(200, attempt)).await;
                 attempt += 1;
-                backoff_ms = backoff_ms.saturating_mul(2);
             }
         }
     }
 }
 
+fn trim_line_end(mut raw: &[u8]) -> &[u8] {
+    if raw.last() == Some(&b'\n') {
+        raw = &raw[..raw.len() - 1];
+    }
+    if raw.last() == Some(&b'\r') {
+        raw = &raw[..raw.len() - 1];
+    }
+    raw
+}
+
 /// Parse a kube log line with an optional RFC3339 prefix into `(timestamp, message)`.
 pub fn parse_log_line(raw: &str) -> (DateTime<Utc>, Arc<str>) {
-    if let Some((ts_s, msg)) = raw.split_once(' ')
-        && let Ok(ts) = DateTime::parse_from_rfc3339(ts_s)
-    {
-        return (ts.with_timezone(&Utc), Arc::from(msg));
+    parse_log_line_bytes(raw.as_bytes())
+}
+
+/// Parse a newline-terminated kube log line from a reusable read buffer.
+pub fn parse_log_line_bytes(raw: &[u8]) -> (DateTime<Utc>, Arc<str>) {
+    let raw = trim_line_end(raw);
+    if let Some(sp) = raw.iter().position(|&b| b == b' ') {
+        if let Ok(ts_s) = std::str::from_utf8(&raw[..sp]) {
+            if let Ok(ts) = DateTime::parse_from_rfc3339(ts_s) {
+                let msg_raw = &raw[sp + 1..];
+                let msg: Arc<str> = match std::str::from_utf8(msg_raw) {
+                    Ok(msg) => Arc::from(msg),
+                    Err(_) => Arc::from(String::from_utf8_lossy(msg_raw).into_owned()),
+                };
+                return (ts.with_timezone(&Utc), msg);
+            }
+        }
     }
-    (Utc::now(), Arc::from(raw))
+    match std::str::from_utf8(raw) {
+        Ok(s) => (Utc::now(), Arc::from(s)),
+        Err(_) => (
+            Utc::now(),
+            Arc::from(String::from_utf8_lossy(raw).into_owned()),
+        ),
+    }
 }
 
 impl LogSource for PodLogSource {
@@ -258,5 +291,14 @@ mod tests {
     fn parse_log_line_fallback_without_timestamp() {
         let (_, msg) = parse_log_line("plain line without prefix");
         assert_eq!(&*msg, "plain line without prefix");
+    }
+
+    #[test]
+    fn parse_log_line_bytes_matches_str_parser() {
+        let line = b"2024-03-15T10:30:45Z hello world\n";
+        let (ts_str, msg_str) = parse_log_line("2024-03-15T10:30:45Z hello world");
+        let (ts_bytes, msg_bytes) = parse_log_line_bytes(line);
+        assert_eq!(ts_str, ts_bytes);
+        assert_eq!(msg_str, msg_bytes);
     }
 }

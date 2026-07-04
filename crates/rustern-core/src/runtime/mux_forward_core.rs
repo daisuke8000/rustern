@@ -44,22 +44,23 @@ impl MuxForwardCore {
         stats: Option<Arc<RunStats>>,
     ) -> MuxForwardCoreHandles {
         let stats = stats.unwrap_or_else(|| RunStats::from_fwd(&fwd_cfg));
+        let counter_stats = fwd_cfg.stats.as_ref().map(|_| stats.clone());
 
         let (mux_tx, mux_rx) = mpsc::channel::<MuxCmd>(256);
         let (raw_event_tx, raw_event_rx) =
             mpsc::channel::<Result<LogEvent, LogSourceError>>(fwd_cfg.buffer_size.max(1));
 
-        let mux_metrics = MuxMetrics::new(Some(stats.clone()));
+        let mux_metrics = MuxMetrics::new(counter_stats.clone());
         let mux_h = spawn_mux_task(
             mux_rx,
             raw_event_tx,
-            Some(stats.clone()),
+            counter_stats.clone(),
             fwd_cfg.resolved_mux_policy(),
             mux_metrics,
             token.clone(),
         );
 
-        let metrics = LossyMetrics::new(Some(stats.clone()));
+        let metrics = LossyMetrics::with_source_tracking(counter_stats, Some(stats.clone()));
         let metrics_rep = metrics.clone();
         let rep_token = token.clone();
         let metrics_rep_h = tokio::spawn(async move {

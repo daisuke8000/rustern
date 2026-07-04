@@ -23,4 +23,4 @@ pub use runtime::{
 };
 #[cfg(feature = "bench")]
 pub use source::ScriptLogSourceOpener;
-pub use source::pod_log::{PodLogRequest, parse_log_line};
+pub use source::pod_log::{PodLogRequest, parse_log_line, parse_log_line_bytes};

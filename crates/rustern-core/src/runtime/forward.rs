@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use futures::Stream;
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::config::{BackpressurePolicy, RuntimeFwdConfig};
@@ -28,13 +28,39 @@ pub struct RunStatsSnapshot {
     pub mux_dropped_lines: u64,
 }
 
+#[repr(C, align(64))]
+#[derive(Debug)]
+struct PaddedCounter(AtomicU64);
+
+impl PaddedCounter {
+    fn new() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    fn load(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    fn store(&self, value: u64) {
+        self.0.store(value, Ordering::Relaxed);
+    }
+
+    fn fetch_add(&self, delta: u64) {
+        self.0.fetch_add(delta, Ordering::Relaxed);
+    }
+
+    fn swap(&self, value: u64) -> u64 {
+        self.0.swap(value, Ordering::Relaxed)
+    }
+}
+
 #[derive(Debug)]
 pub struct RunStats {
-    active_streams: AtomicU64,
-    forwarded_lines: AtomicU64,
-    dropped_lines: AtomicU64,
-    mux_dropped_lines: AtomicU64,
-    source_errors: AtomicU64,
+    active_streams: PaddedCounter,
+    forwarded_lines: PaddedCounter,
+    dropped_lines: PaddedCounter,
+    mux_dropped_lines: PaddedCounter,
+    source_errors: PaddedCounter,
     lossy: bool,
     mux_lossy: bool,
 }
@@ -46,11 +72,11 @@ impl RunStats {
 
     pub fn with_mux_policy(lossy: bool, mux_policy: BackpressurePolicy) -> Arc<Self> {
         Arc::new(Self {
-            active_streams: AtomicU64::new(0),
-            forwarded_lines: AtomicU64::new(0),
-            dropped_lines: AtomicU64::new(0),
-            mux_dropped_lines: AtomicU64::new(0),
-            source_errors: AtomicU64::new(0),
+            active_streams: PaddedCounter::new(),
+            forwarded_lines: PaddedCounter::new(),
+            dropped_lines: PaddedCounter::new(),
+            mux_dropped_lines: PaddedCounter::new(),
+            source_errors: PaddedCounter::new(),
             lossy,
             mux_lossy: mux_policy == BackpressurePolicy::Lossy,
         })
@@ -61,36 +87,35 @@ impl RunStats {
     }
 
     pub fn record_source_api_error(&self) {
-        self.source_errors.fetch_add(1, Ordering::Relaxed);
+        self.source_errors.fetch_add(1);
     }
 
     pub fn had_source_errors(&self) -> bool {
-        self.source_errors.load(Ordering::Relaxed) > 0
+        self.source_errors.load() > 0
     }
 
     pub fn set_active_streams(&self, active_streams: usize) {
-        self.active_streams
-            .store(active_streams as u64, Ordering::Relaxed);
+        self.active_streams.store(active_streams as u64);
     }
 
     pub fn record_forwarded_line(&self) {
-        self.forwarded_lines.fetch_add(1, Ordering::Relaxed);
+        self.forwarded_lines.fetch_add(1);
     }
 
     pub fn record_dropped_line(&self) {
-        self.dropped_lines.fetch_add(1, Ordering::Relaxed);
+        self.dropped_lines.fetch_add(1);
     }
 
     pub fn record_mux_dropped_line(&self) {
-        self.mux_dropped_lines.fetch_add(1, Ordering::Relaxed);
+        self.mux_dropped_lines.fetch_add(1);
     }
 
     pub fn snapshot_and_reset(&self) -> RunStatsSnapshot {
         RunStatsSnapshot {
-            active_streams: self.active_streams.load(Ordering::Relaxed),
-            forwarded_lines: self.forwarded_lines.swap(0, Ordering::Relaxed),
-            dropped_lines: self.dropped_lines.swap(0, Ordering::Relaxed),
-            mux_dropped_lines: self.mux_dropped_lines.swap(0, Ordering::Relaxed),
+            active_streams: self.active_streams.load(),
+            forwarded_lines: self.forwarded_lines.swap(0),
+            dropped_lines: self.dropped_lines.swap(0),
+            mux_dropped_lines: self.mux_dropped_lines.swap(0),
         }
     }
 
@@ -183,37 +208,64 @@ impl MuxMetrics {
 
 #[derive(Debug)]
 pub struct LossyMetrics {
-    last_warn_at: Mutex<Instant>,
+    epoch: Instant,
+    last_warn_ms: AtomicU64,
     dropped_total: AtomicU64,
     warn_interval: Duration,
     cumulative_interval: Duration,
     stats: Option<Arc<RunStats>>,
+    source_stats: Option<Arc<RunStats>>,
 }
 
 impl LossyMetrics {
     pub fn new(stats: Option<Arc<RunStats>>) -> Arc<Self> {
+        Self::with_source_tracking(stats.clone(), stats)
+    }
+
+    pub fn with_source_tracking(
+        counter_stats: Option<Arc<RunStats>>,
+        source_stats: Option<Arc<RunStats>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            last_warn_at: Mutex::new(Instant::now() - Duration::from_secs(60)),
+            epoch: Instant::now(),
+            last_warn_ms: AtomicU64::new(0),
             dropped_total: AtomicU64::new(0),
             warn_interval: Duration::from_secs(5),
             cumulative_interval: Duration::from_secs(30),
-            stats,
+            stats: counter_stats,
+            source_stats,
         })
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
     }
 
     pub fn drop_count(&self) -> u64 {
         self.dropped_total.load(Ordering::Relaxed)
     }
 
-    pub async fn record_drop(self: &Arc<Self>, reason: &str) {
+    pub fn record_drop(&self, reason: &str) {
         self.dropped_total.fetch_add(1, Ordering::Relaxed);
         if let Some(stats) = &self.stats {
             stats.record_dropped_line();
         }
-        let mut last = self.last_warn_at.lock().await;
-        if last.elapsed() >= self.warn_interval {
-            tracing::warn!(reason, "log event dropped due to backpressure");
-            *last = Instant::now();
+        let now_ms = self.now_ms();
+        let warn_ms = self.warn_interval.as_millis() as u64;
+        let mut last = self.last_warn_ms.load(Ordering::Relaxed);
+        while now_ms.saturating_sub(last) >= warn_ms {
+            match self.last_warn_ms.compare_exchange(
+                last,
+                now_ms,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    tracing::warn!(reason, "log event dropped due to backpressure");
+                    break;
+                }
+                Err(observed) => last = observed,
+            }
         }
     }
 
@@ -262,7 +314,7 @@ pub async fn forward_to_render(
                                     }
                                 }
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    metrics.record_drop("channel_full").await;
+                                    metrics.record_drop("channel_full");
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => break,
                             }
@@ -282,7 +334,7 @@ pub async fn forward_to_render(
                         }
                     }
                     Err(LogSourceError::Api(e)) => {
-                        if let Some(stats) = &metrics.stats {
+                        if let Some(stats) = &metrics.source_stats {
                             stats.record_source_api_error();
                         }
                         tracing::warn!(error = %e, "source stream error");
