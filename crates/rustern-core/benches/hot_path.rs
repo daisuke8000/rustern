@@ -14,6 +14,7 @@ use rustern_core::pipeline::{
 };
 use rustern_core::render::LineFormatter;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
+use rustern_core::render::ext_json_renderer::ExtJsonLineFormatter;
 use rustern_core::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
 use rustern_core::render::{RenderCommand, render_task};
 use rustern_core::runtime::PipelineSpecBuilder;
@@ -120,7 +121,7 @@ fn bench_json_pipeline(c: &mut Criterion) {
             let jq = jq.clone();
             let out = rt.block_on(async move {
                 let s = stream::iter(events.into_iter().map(Ok::<_, LogSourceError>));
-                let s = json_annotate(s);
+                let s = json_annotate(s, true);
                 let s = level_classify(s, Some("level".into()));
                 let s = jq_evaluate(s, jq, QueryMode::Filter);
                 s.collect::<Vec<_>>().await
@@ -128,6 +129,28 @@ fn bench_json_pipeline(c: &mut Criterion) {
             black_box(out);
         });
     });
+
+    for mode in [QueryMode::Replace, QueryMode::Append] {
+        let mode_name = match mode {
+            QueryMode::Replace => "jq_replace",
+            QueryMode::Append => "jq_append",
+            QueryMode::Filter => unreachable!(),
+        };
+        group.bench_function(mode_name, |b| {
+            b.iter(|| {
+                let events = batch.clone();
+                let jq = jq.clone();
+                let out = rt.block_on(async move {
+                    let s = stream::iter(events.into_iter().map(Ok::<_, LogSourceError>));
+                    let s = json_annotate(s, true);
+                    let s = level_classify(s, Some("level".into()));
+                    let s = jq_evaluate(s, jq, mode);
+                    s.collect::<Vec<_>>().await
+                });
+                black_box(out);
+            });
+        });
+    }
 
     let skip_spec = PipelineSpecBuilder::new().build(ExitWatchState::new(CancellationToken::new()));
     let full_spec = PipelineSpecBuilder::new()
@@ -156,6 +179,29 @@ fn bench_json_pipeline(c: &mut Criterion) {
         );
     }
 
+    group.finish();
+}
+
+fn bench_extjson_formatter(c: &mut Criterion) {
+    let mut group = c.benchmark_group("extjson_formatter");
+
+    let json_msg = json_message_4k();
+    let json_event = sample_event(&json_msg);
+    let plain_event = sample_event(&plain_message_256());
+
+    for (name, pretty, event) in [
+        ("extjson_json_4k", false, &json_event),
+        ("extjson_plain_256", false, &plain_event),
+        ("ppextjson_json_4k", true, &json_event),
+    ] {
+        let formatter = ExtJsonLineFormatter {
+            all_namespaces: false,
+            pretty,
+        };
+        group.bench_with_input(BenchmarkId::new("format_line", name), event, |b, event| {
+            b.iter(|| black_box(formatter.format_line(black_box(event))));
+        });
+    }
     group.finish();
 }
 
@@ -318,6 +364,27 @@ fn bench_parse_log_line(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_ingest_log_line(c: &mut Criterion) {
+    use rustern_core::parse_log_line_bytes;
+
+    let mut group = c.benchmark_group("ingest_log_line");
+
+    for (name, msg) in [
+        ("plain_256", plain_message_256()),
+        ("json_4k", json_message_4k()),
+    ] {
+        let mut buf = kube_log_line(&msg).into_bytes();
+        buf.push(b'\n');
+        group.bench_with_input(BenchmarkId::new("buffer_to_event", name), &buf, |b, buf| {
+            b.iter(|| {
+                let (ts, message) = parse_log_line_bytes(black_box(buf.as_slice()));
+                black_box((ts, message));
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Mirrors production cursor-tracking stream poll overhead for A/B comparison
 /// without attach/mux wiring (see DSK-97 / benches README).
 struct BenchCursorTrackingStream<S> {
@@ -409,11 +476,13 @@ criterion_group!(
     benches,
     bench_include_exclude,
     bench_json_pipeline,
+    bench_extjson_formatter,
     bench_default_formatter,
     bench_highlight_formatter,
     bench_render_task,
     bench_pipeline_spec_apply,
     bench_parse_log_line,
+    bench_ingest_log_line,
     bench_cursor_tracking_ab,
 );
 criterion_main!(benches);

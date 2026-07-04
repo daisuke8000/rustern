@@ -32,12 +32,13 @@ regex = "1"
 bytes = "1"
 jaq-core = "3"
 jaq-std = "3"
-jaq-json = { version = "2", features = ["serde"] }
+jaq-json = { version = "2", features = ["serde", "sync"] }
 tempfile = "3"
 miette = { version = "7.6", features = ["fancy"] }
 humantime = "2"
 chrono-tz = "0.10"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+fastrand = "2"
 secrecy = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 

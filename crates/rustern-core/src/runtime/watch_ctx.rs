@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::cursor_store::{CursorUpdate, ReconnectCursorStore};
+use super::cursor_service::CursorService;
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_admission::WatchAdmissionPolicy;
@@ -22,9 +22,7 @@ pub(crate) struct AttachDeps {
     pub(crate) log_opener: Arc<dyn LogSourceOpener>,
     pub(crate) root_child: CancellationToken,
     pub(crate) pod_log: PodLogRequest,
-    pub(crate) cursor_reconnect: bool,
-    pub(crate) reconnect_cursor: ReconnectCursorStore,
-    pub(crate) cursor_update_tx: mpsc::UnboundedSender<CursorUpdate>,
+    pub(crate) cursor: CursorService,
     pub(crate) sem: Arc<Semaphore>,
     pub(crate) follow_limit_notifier: Option<mpsc::Sender<()>>,
     pub(crate) pod_meta: PodMetaCache,

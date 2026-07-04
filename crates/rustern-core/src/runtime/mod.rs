@@ -13,6 +13,7 @@
 
 mod attach;
 mod config;
+mod cursor_service;
 mod cursor_store;
 mod forward;
 mod list_pods;

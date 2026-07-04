@@ -72,9 +72,6 @@ async fn mux_multiplex_loop(
                         }
                     }
                 }
-                if let Some(stats) = &stats {
-                    stats.set_active_streams(map.len());
-                }
             }
         }
     }

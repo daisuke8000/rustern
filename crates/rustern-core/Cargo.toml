@@ -25,6 +25,7 @@ jaq-core = { workspace = true }
 jaq-std = { workspace = true }
 jaq-json = { workspace = true }
 jiff = { workspace = true }
+fastrand = { workspace = true }
 owo-colors = "4"
 seahash = "4"
 secrecy = { workspace = true }

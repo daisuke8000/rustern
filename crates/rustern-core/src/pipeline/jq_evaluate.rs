@@ -81,13 +81,13 @@ where
         async move {
             match r {
                 Ok(mut ev) => {
-                    let Some(v) = ev.structured.take() else {
+                    let Some(ref parsed) = ev.structured else {
                         return match mode {
                             QueryMode::Filter => None,
                             _ => Some(Ok(ev)),
                         };
                     };
-                    let value: Val = match serde_json::from_value(v) {
+                    let value = match parsed.to_jaq_val() {
                         Ok(v) => v,
                         Err(_) => return Some(Ok(ev)),
                     };
@@ -104,6 +104,7 @@ where
                             }
                         }
                         QueryMode::Replace => {
+                            ev.structured = None;
                             let rendered = outputs
                                 .iter()
                                 .map(|v| format!("{v}"))
@@ -113,6 +114,7 @@ where
                             Some(Ok(ev))
                         }
                         QueryMode::Append => {
+                            ev.structured = None;
                             let rendered = outputs
                                 .iter()
                                 .map(|v| format!("{v}"))
@@ -133,7 +135,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::{ContextName, Labels, SourceKind, SourceMeta};
+    use crate::source::{ContextName, Labels, ParsedJson, SourceKind, SourceMeta};
     use chrono::Utc;
     use std::sync::Arc;
 
@@ -153,7 +155,7 @@ mod tests {
             }),
             timestamp: Utc::now(),
             message: Arc::from(raw),
-            structured: Some(serde_json::from_str(raw).unwrap()),
+            structured: Some(ParsedJson::Jaq(serde_json::from_str(raw).unwrap())),
             level: None,
             palette_index: None,
             container_palette_index: None,
@@ -199,6 +201,7 @@ mod tests {
         let out: Vec<_> = jq_evaluate(s, f, QueryMode::Filter).collect().await;
         assert_eq!(out.len(), 1);
         assert_eq!(&*out[0].as_ref().unwrap().message, raw);
+        assert!(out[0].as_ref().unwrap().structured.is_some());
     }
 
     #[tokio::test]

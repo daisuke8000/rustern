@@ -55,7 +55,7 @@ impl PodStreamRegistry {
             if let Some(t) = self.tokens.remove(&k) {
                 t.cancel();
             }
-            ctx.attach.reconnect_cursor.remove(&k).await;
+            ctx.attach.cursor.forget(&k).await;
             self.active.remove(&k);
             if mux_tx.send(MuxCmd::Remove(k)).await.is_err() {
                 tracing::debug!("mux channel closed, skipping remove");
