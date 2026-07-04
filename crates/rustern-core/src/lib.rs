@@ -21,8 +21,6 @@ pub use runtime::{
     RuntimeFwdConfig, RuntimeStatsConfig, build_log_request_semaphore, forward_to_render, run,
     run_with_client, spawn_mux_task,
 };
-#[doc(hidden)]
-pub use runtime::{PipelineStages, apply_pipeline};
 #[cfg(feature = "bench")]
 pub use source::ScriptLogSourceOpener;
 pub use source::pod_log::{PodLogRequest, parse_log_line};

@@ -1,14 +1,10 @@
 //! One-shot pod list for no-follow runs (avoids opening a watch stream).
 
-use std::collections::HashSet;
-
 use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 use kube::api::ListParams;
 
 use super::config::RunError;
-use super::watch_admission::WatchAdmissionPolicy;
-use crate::source::SourceKey;
 
 const MAX_LIST_PAGES: usize = 1000;
 
@@ -29,14 +25,4 @@ pub(crate) async fn list_pods_paginated(
     Err(RunError::Other(format!(
         "pod list pagination exceeded {MAX_LIST_PAGES} pages"
     )))
-}
-
-#[allow(dead_code)]
-pub(crate) async fn list_pods_once(
-    api: &Api<Pod>,
-    list_params: &ListParams,
-    admission: &WatchAdmissionPolicy,
-) -> Result<HashSet<SourceKey>, RunError> {
-    let pods = list_pods_paginated(api, list_params).await?;
-    Ok(admission.collect_snapshot(pods))
 }

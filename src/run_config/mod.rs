@@ -6,7 +6,7 @@ use std::io::{self, IsTerminal};
 use tokio_util::sync::CancellationToken;
 
 use rustern_core::discovery::pod_condition::parse_pod_condition;
-use rustern_core::discovery::pod_watcher::{
+use rustern_core::discovery::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
 use rustern_core::{

@@ -36,7 +36,7 @@ Index of `src/` paths and roles.
 | `runtime/mod.rs` | Module layout and `pub use` (see below) |
 | `runtime/runner.rs` | **`run`** (watch / spawn wiring) |
 | `runtime/forward.rs` | **`forward_to_render`**, `LossyMetrics`, log semaphore |
-| `runtime/pipeline.rs` | **`apply_pipeline`** (stream wrapper used only by `run`) |
+| `runtime/pipeline.rs` | Internal stage wiring for [`PipelineSpec`](src/runtime/spec.rs) |
 | `runtime/config.rs` | **`CoreRunConfig`**, `RunError`, `RuntimeFwdConfig`, etc. |
 | `source/mod.rs` | Domain types: `LogEvent`, `SourceKey`, `LogSource`, … |
 | `source/pod_log.rs` | `PodLogSource` (log API → line stream) |
@@ -45,8 +45,8 @@ Index of `src/` paths and roles.
 | `discovery/workload_selector.rs` | `GET` workload → pod label selector (single-ns) |
 | `discovery/pod_list.rs` | Query → `ListParams` / `WatchConfig`, field selector merge |
 | `discovery/container_keys.rs` | Pod → `SourceKey` (`keys_from_pod`, container lifecycle filter) |
-| `discovery/pod_reconcile.rs` | `reconcile`, `pod_event_stream` |
-| `discovery/pod_watcher.rs` | Re-exports the above (stable import path) |
+| `discovery/pod_reconcile.rs` | `reconcile` |
+| `discovery/mod.rs` | Re-exports container key discovery and reconcile helpers |
 | `pipeline/*.rs` | Line-stream transforms (order fixed by `runtime`) |
 | `render/mod.rs` | `RenderCommand`, `render_task`, `flush_ticker` |
 | `render/setup.rs` | `LineFormatter` selection, stern highlight wrap, color opts |
@@ -57,7 +57,7 @@ Index of `src/` paths and roles.
 ### Principles
 
 - Lower layers avoid Kubernetes / I/O details where possible. `pipeline` and `render` only see `LogEvent` streams and never call the Pod API directly.
-- Pipeline stages do not call each other across files; order lives in `runtime::apply_pipeline`.
+- Pipeline stages do not call each other across files; order lives in `runtime::PipelineSpec` / internal pipeline wiring.
 - Kubernetes-specific logic stays in `discovery/*` and `source/pod_log.rs`.
 
 ### Diagram: layers and dependencies
@@ -83,7 +83,8 @@ flowchart TD
 
     subgraph L1 [L1: Infrastructure]
         PodLog["source/pod_log.rs"]
-        PodWatcher["discovery/pod_watcher.rs"]
+        ContainerKeys["discovery/container_keys.rs"]
+        PodReconcile["discovery/pod_reconcile.rs"]
     end
 
     subgraph L0 [L0: Foundation / Domain]
@@ -95,7 +96,8 @@ flowchart TD
     Runtime --> DiscCtx
     Runtime --> DiscRes
     Runtime --> PodList["discovery/pod_list.rs"]
-    Runtime --> PodWatcher
+    Runtime --> ContainerKeys
+    Runtime --> PodReconcile
     Runtime --> PodLog
     Runtime --> Pipeline
     Runtime --> Render
@@ -104,28 +106,29 @@ flowchart TD
     PodList --> DiscCtx
 
     PodLog --> SrcMod
-    PodWatcher --> SrcMod
+    ContainerKeys --> SrcMod
+    PodReconcile --> SrcMod
     Pipeline --> SrcMod
     Render --> SrcMod
 
     style Legend fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
 ```
 
-`runtime::runner::run` references `discovery/context`, `discovery/resource`, and `discovery/pod_list`. `pod_watcher` and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
+`runtime::run` references `discovery/context`, `discovery/resource`, `discovery/pod_list`, `discovery/container_keys`, and `discovery/pod_reconcile`. Container key discovery and `pod_log` depend only on `source/mod` (`SourceKey`, etc.), not on `context` / `resource`.
 
 ### Layers explained
 
 | Layer | Contents |
 |-------|----------|
 | **L0** | Types, kubeconfig, query parsing. Does not depend on other `rustern-core` modules. |
-| **L1** | `pod_watcher`: Pod → `SourceKey`. `pod_log`: log API → `LogSource`. Both build on L0 models. |
+| **L1** | `container_keys`: Pod → `SourceKey`. `pod_log`: log API → `LogSource`. Both build on L0 models. |
 | **L2** | Incremental transforms on `Result<LogEvent, LogSourceError>` streams. |
 | **L3** | Single writer, formatting, flush. |
 | **L4** | Channels, `StreamMap`, `tokio::spawn` wiring L1–L3 at runtime. |
 
 ## Pipeline order
 
-Order inside `runtime::apply_pipeline`. Only include/exclude placement changes with `FilterOn`; the last stage is always `color_assign`.
+Order inside `PipelineSpec::apply`. Only include/exclude placement changes with `FilterOn`; the last stage is always `color_assign`.
 
 ### `FilterOn` branches
 
@@ -166,7 +169,7 @@ Without `json_query`, `jq_evaluate` is effectively optional plumbing; stage sema
 3. **Keys and sources** — For each `SourceKey`, open logs with `PodLogSource::start`.
 4. **Merge** — Combine streams with `StreamMap<SourceKey, _>` (mux task).
 5. **Raw channel** — Send pre-pipeline `LogEvent` through mpsc (backpressure).
-6. **Pipeline** — `ReceiverStream` → `apply_pipeline` (order above).
+6. **Pipeline** — `ReceiverStream` → `PipelineSpec::apply` (order above).
 7. **Renderer** — `forward_to_render` sends `RenderCommand::Line`; optional post-format `render::highlight` layer for default output (stern `-H`/`-i` emphasis); in `lossy` mode, full `try_send` drops lines while still recording drop metrics.
 8. **Output** — `render_task` writes via `LineFormatter`; `flush_ticker` triggers periodic flush.
 
@@ -179,7 +182,7 @@ flowchart LR
     Prep[Setup<br/>Client / Query / Watch] --> LogOpen["Watch:<br/>PodLogSource::start"]
     LogOpen -->|MuxCmd::Add + stream| SMap[Mux: StreamMap]
     SMap -->|LogEvent| RawMpsc[raw mpsc]
-    RawMpsc -->|ReceiverStream| Apply[apply_pipeline]
+    RawMpsc -->|ReceiverStream| Apply[PipelineSpec::apply]
     Apply --> Fwd[forward_to_render]
     Fwd -->|RenderCommand| RTask[render_task]
     RTask --> Stdout((stdout))
@@ -226,7 +229,7 @@ sequenceDiagram
 
     Note over M, R: Lines arrive
     M->>P: LogEvent (raw mpsc)
-    P->>P: apply_pipeline
+    P->>P: PipelineSpec::apply
     P->>R: RenderCommand::Line
     R->>R: format + stdout
 

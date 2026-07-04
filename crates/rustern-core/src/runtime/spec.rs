@@ -1,8 +1,5 @@
 //! Pipeline specification: compile run config into a log-event stream transformer.
 //!
-//! Prefer [`PipelineSpec`] over the hidden [`super::pipeline::PipelineStages`] /
-//! [`super::pipeline::apply_pipeline`] pair, which remain for migration only.
-//!
 //! ## Run path
 //!
 //! ```ignore
@@ -18,7 +15,7 @@
 //!
 //! Use [`PipelineSpecBuilder`] for minimal defaults (`default_pipeline_stages` equivalent).
 //!
-//! Stage ordering stays inside [`super::pipeline::apply_pipeline`]; `PipelineStageOrder`
+//! Stage ordering stays inside the internal pipeline wiring module; `PipelineStageOrder`
 //! remains crate-private. Future stern-plus filters should extend ordering there, then
 //! surface new knobs on this spec type.
 
@@ -217,7 +214,7 @@ impl PipelineSpecBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::ExitOnLevel;
+    use crate::pipeline::{ExitOnLevel, QueryMode};
     use crate::source::{ContextName, Labels, SourceKind, SourceMeta};
     use chrono::Utc;
     use futures::StreamExt;
@@ -297,5 +294,179 @@ mod tests {
             Some(LogLevel::Error)
         ));
         assert!(spec.triggered());
+    }
+
+    fn base_spec(token: CancellationToken) -> PipelineSpec {
+        PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("visible").unwrap()])
+            .with_exit_on(vec![Regex::new("secret").unwrap()])
+            .build(ExitWatchState::new(token))
+    }
+
+    #[tokio::test]
+    async fn exit_on_fires_before_include_filter() {
+        let token = CancellationToken::new();
+        let spec = base_spec(token.clone());
+        let s = futures::stream::iter(vec![Ok(ev("secret hidden line"))]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert!(out.is_empty(), "include filter hides the line from output");
+        assert!(
+            token.is_cancelled(),
+            "exit-on still triggers on hidden line"
+        );
+    }
+
+    #[tokio::test]
+    async fn exit_on_level_fires_before_include_filter() {
+        let token = CancellationToken::new();
+        let raw = r#"{"level":"error","msg":"hidden"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("visible").unwrap()])
+            .with_level_key(Some("level".into()))
+            .with_exit_on_level(Some(ExitOnLevel::Warn))
+            .build(ExitWatchState::new(token.clone()));
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert!(out.is_empty(), "include filter hides the line from output");
+        assert!(
+            token.is_cancelled(),
+            "exit-on-level still triggers on hidden line"
+        );
+    }
+
+    #[tokio::test]
+    async fn exit_on_level_triggers_after_classify() {
+        use crate::source::LogLevel;
+        let token = CancellationToken::new();
+        let raw = r#"{"level":"error","msg":"boom"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let spec = PipelineSpecBuilder::new()
+            .with_level_key(Some("level".into()))
+            .with_exit_on_level(Some(ExitOnLevel::Warn))
+            .build(ExitWatchState::new(token.clone()));
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert_eq!(out.len(), 1);
+        assert!(matches!(
+            out[0].as_ref().unwrap().level,
+            Some(LogLevel::Error)
+        ));
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn original_exit_on_level_include_runs_before_jq() {
+        let token = CancellationToken::new();
+        let raw = r#"{"level":"error","msg":"visible line"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("^\\{").unwrap()])
+            .with_jq(Some((
+                crate::pipeline::validate_filter(".msg").unwrap(),
+                QueryMode::Replace,
+            )))
+            .with_level_key(Some("level".into()))
+            .with_exit_on_level(Some(ExitOnLevel::Warn))
+            .build(ExitWatchState::new(token.clone()));
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert_eq!(
+            out.len(),
+            1,
+            "include matches original JSON before jq rewrite"
+        );
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn transformed_exit_on_fires_on_raw_message_before_jq() {
+        let token = CancellationToken::new();
+        let raw = r#"{"trigger":"secret","msg":"visible payload"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("visible").unwrap()])
+            .with_filter_on(FilterOn::Transformed)
+            .with_jq(Some((
+                crate::pipeline::validate_filter(".msg").unwrap(),
+                QueryMode::Replace,
+            )))
+            .with_exit_on(vec![Regex::new("secret").unwrap()])
+            .build(ExitWatchState::new(token.clone()));
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert!(
+            token.is_cancelled(),
+            "exit-on matches raw JSON (trigger field) before jq rewrites message"
+        );
+        assert_eq!(
+            out.len(),
+            1,
+            "jq output matches include after exit-on fired"
+        );
+        assert!(
+            out[0].as_ref().unwrap().message.contains("visible"),
+            "include runs on jq-transformed message without secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn transformed_include_runs_after_jq() {
+        let token = CancellationToken::new();
+        let raw = r#"{"msg":"visible line"}"#;
+        let mut event = ev(raw);
+        event.structured = Some(serde_json::from_str(raw).unwrap());
+
+        let spec = PipelineSpecBuilder::new()
+            .with_includes(vec![Regex::new("\"visible").unwrap()])
+            .with_filter_on(FilterOn::Transformed)
+            .with_jq(Some((
+                crate::pipeline::validate_filter(".msg").unwrap(),
+                QueryMode::Replace,
+            )))
+            .build(ExitWatchState::new(token));
+        let s = futures::stream::iter(vec![Ok(event)]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].as_ref().unwrap().message.contains("visible"),
+            "include matches jq-replaced message text"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_json_annotate_without_jq_or_level_key() {
+        let raw = r#"{"level":"error","msg":"boom"}"#;
+        let spec = PipelineSpecBuilder::new().build(ExitWatchState::new(CancellationToken::new()));
+        let s = futures::stream::iter(vec![Ok(ev(raw))]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert!(
+            out[0].as_ref().unwrap().structured.is_none(),
+            "json annotate should be skipped when jq and level_key are unset"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_annotate_runs_when_level_key_set() {
+        use crate::source::LogLevel;
+        let raw = r#"{"level":"error","msg":"boom"}"#;
+        let spec = PipelineSpecBuilder::new()
+            .with_level_key(Some("level".into()))
+            .build(ExitWatchState::new(CancellationToken::new()));
+        let s = futures::stream::iter(vec![Ok(ev(raw))]);
+        let out: Vec<_> = spec.apply(s).collect().await;
+        assert!(out[0].as_ref().unwrap().structured.is_some());
+        assert!(matches!(
+            out[0].as_ref().unwrap().level,
+            Some(LogLevel::Error)
+        ));
     }
 }
