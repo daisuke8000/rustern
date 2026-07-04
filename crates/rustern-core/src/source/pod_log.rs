@@ -97,8 +97,15 @@ impl PodLogSource {
 
         let meta_arc = Arc::clone(&meta);
         let stream = futures::stream::unfold(
-            (reader, meta_arc, token.clone(), Vec::new(), false),
-            |(mut reader, meta, token, mut buf, done)| async move {
+            (
+                reader,
+                meta_arc,
+                token.clone(),
+                Vec::new(),
+                false,
+                LogLineTimestampResolver::default(),
+            ),
+            |(mut reader, meta, token, mut buf, done, mut ts_resolver)| async move {
                 if done {
                     return None;
                 }
@@ -110,7 +117,8 @@ impl PodLogSource {
                     } => match read {
                         Ok(0) => None,
                         Ok(_) => {
-                            let (ts, msg) = parse_log_line_bytes(&buf);
+                            let (parsed, msg) = split_log_line(&buf);
+                            let (ts, msg) = ts_resolver.resolve(parsed, msg);
                             let ev = LogEvent {
                                 source: meta.clone(),
                                 timestamp: ts,
@@ -120,11 +128,11 @@ impl PodLogSource {
                                 palette_index: meta.palette_index,
                                 container_palette_index: meta.container_palette_index,
                             };
-                            Some((Ok(ev), (reader, meta, token, buf, false)))
+                            Some((Ok(ev), (reader, meta, token, buf, false, ts_resolver)))
                         }
                         Err(e) => Some((
                             Err(LogSourceError::Api(e.to_string())),
-                            (reader, meta, token, buf, true),
+                            (reader, meta, token, buf, true, ts_resolver),
                         )),
                     },
                 }
@@ -177,13 +185,36 @@ fn trim_line_end(mut raw: &[u8]) -> &[u8] {
     raw
 }
 
-/// Parse a kube log line with an optional RFC3339 prefix into `(timestamp, message)`.
-pub fn parse_log_line(raw: &str) -> (DateTime<Utc>, Arc<str>) {
-    parse_log_line_bytes(raw.as_bytes())
+/// Monotonic timestamp assignment for lines without an RFC3339 kube prefix.
+///
+/// With `timestamps: true`, kube lines normally include a prefix. Undated lines
+/// advance +1µs from the previous line on the same stream so ordering and
+/// `--cursor-reconnect` cursors stay stable instead of jumping to wall clock.
+#[derive(Debug, Default)]
+struct LogLineTimestampResolver {
+    last: Option<DateTime<Utc>>,
 }
 
-/// Parse a newline-terminated kube log line from a reusable read buffer.
-pub fn parse_log_line_bytes(raw: &[u8]) -> (DateTime<Utc>, Arc<str>) {
+impl LogLineTimestampResolver {
+    fn resolve(
+        &mut self,
+        parsed: Option<DateTime<Utc>>,
+        msg: Arc<str>,
+    ) -> (DateTime<Utc>, Arc<str>) {
+        if let Some(ts) = parsed {
+            self.last = Some(ts);
+            return (ts, msg);
+        }
+        let ts = self
+            .last
+            .map(|prev| prev + chrono::Duration::microseconds(1))
+            .unwrap_or_else(|| DateTime::UNIX_EPOCH);
+        self.last = Some(ts);
+        (ts, msg)
+    }
+}
+
+fn split_log_line(raw: &[u8]) -> (Option<DateTime<Utc>>, Arc<str>) {
     let raw = trim_line_end(raw);
     if let Some(sp) = raw.iter().position(|&b| b == b' ') {
         if let Ok(ts_s) = std::str::from_utf8(&raw[..sp]) {
@@ -193,17 +224,31 @@ pub fn parse_log_line_bytes(raw: &[u8]) -> (DateTime<Utc>, Arc<str>) {
                     Ok(msg) => Arc::from(msg),
                     Err(_) => Arc::from(String::from_utf8_lossy(msg_raw).into_owned()),
                 };
-                return (ts.with_timezone(&Utc), msg);
+                return (Some(ts.with_timezone(&Utc)), msg);
             }
         }
     }
-    match std::str::from_utf8(raw) {
-        Ok(s) => (Utc::now(), Arc::from(s)),
-        Err(_) => (
-            Utc::now(),
-            Arc::from(String::from_utf8_lossy(raw).into_owned()),
-        ),
-    }
+    let msg: Arc<str> = match std::str::from_utf8(raw) {
+        Ok(s) => Arc::from(s),
+        Err(_) => Arc::from(String::from_utf8_lossy(raw).into_owned()),
+    };
+    (None, msg)
+}
+
+/// Parse a kube log line with an optional RFC3339 prefix into `(timestamp, message)`.
+///
+/// Standalone calls without stream context assign [`DateTime::UNIX_EPOCH`] to undated lines.
+pub fn parse_log_line(raw: &str) -> (DateTime<Utc>, Arc<str>) {
+    let mut resolver = LogLineTimestampResolver::default();
+    let (parsed, msg) = split_log_line(raw.as_bytes());
+    resolver.resolve(parsed, msg)
+}
+
+/// Parse a newline-terminated kube log line from a reusable read buffer.
+pub fn parse_log_line_bytes(raw: &[u8]) -> (DateTime<Utc>, Arc<str>) {
+    let mut resolver = LogLineTimestampResolver::default();
+    let (parsed, msg) = split_log_line(raw);
+    resolver.resolve(parsed, msg)
 }
 
 impl LogSource for PodLogSource {
@@ -291,8 +336,24 @@ mod tests {
 
     #[test]
     fn parse_log_line_fallback_without_timestamp() {
-        let (_, msg) = parse_log_line("plain line without prefix");
+        let (ts, msg) = parse_log_line("plain line without prefix");
         assert_eq!(&*msg, "plain line without prefix");
+        assert_eq!(ts, DateTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn undated_lines_are_monotonic_per_resolver() {
+        let mut resolver = LogLineTimestampResolver::default();
+        let (ts1, _) = resolver.resolve(None, Arc::from("first"));
+        let (ts2, _) = resolver.resolve(None, Arc::from("second"));
+        assert!(ts2 > ts1);
+        let base = DateTime::parse_from_rfc3339("2024-03-15T10:30:45Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let (ts3, _) = resolver.resolve(Some(base), Arc::from("dated"));
+        assert_eq!(ts3, base);
+        let (ts4, _) = resolver.resolve(None, Arc::from("after dated"));
+        assert!(ts4 > ts3);
     }
 
     #[test]
