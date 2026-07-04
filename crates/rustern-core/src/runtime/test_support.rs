@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::cursor_store::{ReconnectCursorStore, run_cursor_update_processor};
+use super::cursor_service::CursorService;
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_admission::WatchAdmissionPolicy;
@@ -117,14 +117,9 @@ impl TestOrchestratorBuilder {
         let log_opener = self
             .log_opener
             .unwrap_or_else(|| ScriptLogSourceOpener::new(vec![]));
-        let reconnect_cursor = ReconnectCursorStore::new();
-        let (cursor_update_tx, cursor_update_rx) = mpsc::unbounded_channel();
         let root_token = CancellationToken::new();
-        let cursor_processor = tokio::spawn(run_cursor_update_processor(
-            cursor_update_rx,
-            reconnect_cursor.clone(),
-            root_token.clone(),
-        ));
+        let (cursor, cursor_processor) =
+            CursorService::spawn(self.cursor_reconnect, root_token.clone());
         let ctx = PodWatchCtx {
             admission: WatchAdmissionPolicy::try_new(
                 self.context_name,
@@ -149,9 +144,7 @@ impl TestOrchestratorBuilder {
                 log_opener,
                 root_child: root_token.child_token(),
                 pod_log: self.pod_log,
-                cursor_reconnect: self.cursor_reconnect,
-                reconnect_cursor,
-                cursor_update_tx,
+                cursor,
                 sem: Arc::new(Semaphore::new(self.sem_permits)),
                 follow_limit_notifier: None,
                 pod_meta: PodMetaCache::new(),
