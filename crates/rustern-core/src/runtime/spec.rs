@@ -388,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn transformed_exit_on_fires_on_raw_message_before_jq() {
         let token = CancellationToken::new();
-        let raw = r#"{"msg":"secret payload"}"#;
+        let raw = r#"{"trigger":"secret","msg":"visible payload"}"#;
         let mut event = ev(raw);
         event.structured = Some(serde_json::from_str(raw).unwrap());
 
@@ -403,10 +403,14 @@ mod tests {
             .build(ExitWatchState::new(token.clone()));
         let s = futures::stream::iter(vec![Ok(event)]);
         let out: Vec<_> = spec.apply(s).collect().await;
-        assert!(out.is_empty(), "include filter hides transformed line");
         assert!(
             token.is_cancelled(),
-            "transformed path runs exit-on on raw message before jq/include"
+            "exit-on matches raw JSON (trigger field) before jq rewrites message"
+        );
+        assert_eq!(out.len(), 1, "jq output matches include after exit-on fired");
+        assert!(
+            out[0].as_ref().unwrap().message.contains("visible"),
+            "include runs on jq-transformed message without secret"
         );
     }
 
