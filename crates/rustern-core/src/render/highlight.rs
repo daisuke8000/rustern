@@ -19,9 +19,14 @@ impl SternHighlightLineFormatter {
 }
 
 impl LineFormatter for SternHighlightLineFormatter {
-    fn format_line(&self, event: &LogEvent) -> String {
-        let line = self.inner.format_line(event);
-        highlight_default_line(&line, &self.re)
+    fn format_into(&self, event: &LogEvent, buf: &mut String) {
+        self.inner.format_into(event, buf);
+        if self.re.find(buf).is_none() {
+            return;
+        }
+        let highlighted = highlight_default_line(buf, &self.re);
+        buf.clear();
+        buf.push_str(&highlighted);
     }
 }
 

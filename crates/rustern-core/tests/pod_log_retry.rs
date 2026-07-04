@@ -42,6 +42,8 @@ async fn retries_until_success() {
         node: None,
         labels: Arc::new(Labels::default()),
         uid: "u1".into(),
+        palette_index: None,
+        container_palette_index: None,
     };
 
     let source = PodLogSource::start(

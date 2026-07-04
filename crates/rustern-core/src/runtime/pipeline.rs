@@ -33,6 +33,14 @@ pub(crate) fn needs_json_annotation(
     jq.is_some() || level_key.is_some()
 }
 
+fn needs_include_exclude(includes: &Arc<[Regex]>, excludes: &Arc<[Regex]>) -> bool {
+    !includes.is_empty() || !excludes.is_empty()
+}
+
+fn needs_color_assign(opts: ColorAssignOpts) -> bool {
+    opts.pod_colors || opts.container_colors
+}
+
 pub(crate) fn apply_pipeline<S>(
     stream: S,
     stages: PipelineStages,
@@ -66,7 +74,7 @@ where
         ));
     }
 
-    if order.include_before_container {
+    if order.include_before_container && needs_include_exclude(&includes, &excludes) {
         s = Box::pin(include_exclude(
             s,
             Arc::clone(&includes),
@@ -81,13 +89,16 @@ where
     if needs_json_annotation {
         s = Box::pin(json_annotate(s));
     }
-    s = Box::pin(level_classify(s, level_key));
+    if let Some(key) = level_key {
+        s = Box::pin(level_classify(s, Some(key)));
+    }
 
     if let Some(min_level) = exit_on_level {
         s = Box::pin(exit_watch_level(s, min_level, exit_watch));
     }
 
-    if order.include_after_classify_before_transform {
+    if order.include_after_classify_before_transform && needs_include_exclude(&includes, &excludes)
+    {
         s = Box::pin(include_exclude(
             s,
             Arc::clone(&includes),
@@ -101,9 +112,13 @@ where
         s
     };
 
-    if order.include_after_transform {
+    if order.include_after_transform && needs_include_exclude(&includes, &excludes) {
         s = Box::pin(include_exclude(s, includes, excludes));
     }
 
-    Box::pin(color_assign(s, color_opts))
+    if needs_color_assign(color_opts) {
+        s = Box::pin(color_assign(s, color_opts));
+    }
+
+    s
 }

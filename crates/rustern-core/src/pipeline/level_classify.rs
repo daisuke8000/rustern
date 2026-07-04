@@ -16,13 +16,21 @@ fn dot_pointer(path: &str) -> String {
 }
 
 fn classify_str(s: &str) -> LogLevel {
-    match s.to_ascii_lowercase().as_str() {
-        "error" | "err" | "fatal" => LogLevel::Error,
-        "warn" | "warning" => LogLevel::Warn,
-        "info" => LogLevel::Info,
-        "debug" => LogLevel::Debug,
-        "trace" => LogLevel::Trace,
-        other => LogLevel::Other(other.to_string()),
+    if s.eq_ignore_ascii_case("error")
+        || s.eq_ignore_ascii_case("err")
+        || s.eq_ignore_ascii_case("fatal")
+    {
+        LogLevel::Error
+    } else if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") {
+        LogLevel::Warn
+    } else if s.eq_ignore_ascii_case("info") {
+        LogLevel::Info
+    } else if s.eq_ignore_ascii_case("debug") {
+        LogLevel::Debug
+    } else if s.eq_ignore_ascii_case("trace") {
+        LogLevel::Trace
+    } else {
+        LogLevel::Other(s.to_string())
     }
 }
 
@@ -70,6 +78,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from(raw),

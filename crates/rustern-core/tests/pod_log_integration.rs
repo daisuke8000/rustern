@@ -37,6 +37,8 @@ async fn streams_two_lines_from_mock_apiserver() {
         node: None,
         labels: Arc::new(Labels::default()),
         uid: "uid-1".into(),
+        palette_index: None,
+        container_palette_index: None,
     };
 
     let source = PodLogSource::start(
@@ -89,6 +91,8 @@ async fn passes_previous_and_since_time_query_params() {
         node: None,
         labels: Arc::new(Labels::default()),
         uid: "uid-1".into(),
+        palette_index: None,
+        container_palette_index: None,
     };
 
     let ts: jiff::Timestamp = "2024-03-15T10:30:45Z".parse().unwrap();

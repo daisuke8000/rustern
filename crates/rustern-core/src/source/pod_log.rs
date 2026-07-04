@@ -113,8 +113,8 @@ impl PodLogSource {
                                 message: msg,
                                 structured: None,
                                 level: None,
-                                palette_index: None,
-                                container_palette_index: None,
+                                palette_index: meta.palette_index,
+                                container_palette_index: meta.container_palette_index,
                             };
                             Some((Ok(ev), (lines, meta, token)))
                         }
@@ -200,6 +200,8 @@ mod tests {
             node: None,
             labels: Arc::new(Labels::default()),
             uid: "uid".into(),
+            palette_index: None,
+            container_palette_index: None,
         }
     }
 

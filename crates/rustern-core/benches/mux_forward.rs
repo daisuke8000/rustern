@@ -181,6 +181,8 @@ fn sample_event(i: usize) -> LogEvent {
             node: None,
             labels: Arc::new(Labels::default()),
             uid: format!("uid-{}", i % 6),
+            palette_index: None,
+            container_palette_index: None,
         }),
         timestamp: Utc::now(),
         message: Arc::from(format!("bench line {i} padding=0123456789")),

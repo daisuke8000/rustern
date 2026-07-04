@@ -2,7 +2,7 @@ use futures::stream::{Stream, StreamExt};
 use seahash::SeaHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::source::{LogEvent, LogSourceError};
+use crate::source::{LogEvent, LogSourceError, SourceMeta};
 
 /// Knobs for [`color_assign`] (stern `--pod-colors` / `--container-colors` / `--diff-container`).
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +18,20 @@ fn stable_palette_index(key: &str) -> u8 {
     (h.finish() % 16) as u8
 }
 
+pub fn apply_palette_to_meta(meta: &mut SourceMeta, opts: ColorAssignOpts) {
+    if opts.pod_colors {
+        meta.palette_index = Some(stable_palette_index(&meta.pod));
+    }
+    if opts.container_colors {
+        let key = if opts.diff_container {
+            meta.container.as_str()
+        } else {
+            meta.pod.as_str()
+        };
+        meta.container_palette_index = Some(stable_palette_index(key));
+    }
+}
+
 pub fn color_assign<S>(
     inner: S,
     opts: ColorAssignOpts,
@@ -27,10 +41,10 @@ where
 {
     inner.map(move |r| {
         r.map(|mut ev| {
-            if opts.pod_colors {
+            if opts.pod_colors && ev.palette_index.is_none() {
                 ev.palette_index = Some(stable_palette_index(&ev.source.pod));
             }
-            if opts.container_colors {
+            if opts.container_colors && ev.container_palette_index.is_none() {
                 let key = if opts.diff_container {
                     ev.source.container.as_str()
                 } else {
@@ -65,6 +79,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from("m"),

@@ -37,6 +37,8 @@ async fn cancelled_source_drops_all_resources_within_100ms() {
         node: None,
         labels: Arc::new(Labels::default()),
         uid: "u1".into(),
+        palette_index: None,
+        container_palette_index: None,
     };
 
     let src = PodLogSource::start(

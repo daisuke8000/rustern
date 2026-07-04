@@ -4,8 +4,9 @@ use crate::source::LogEvent;
 pub struct RawLineFormatter;
 
 impl LineFormatter for RawLineFormatter {
-    fn format_line(&self, event: &LogEvent) -> String {
-        format!("{}\n", event.message)
+    fn format_into(&self, event: &LogEvent, buf: &mut String) {
+        buf.push_str(&event.message);
+        buf.push('\n');
     }
 }
 
@@ -28,6 +29,8 @@ mod tests {
                 node: None,
                 labels: Arc::new(Labels::default()),
                 uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
             }),
             timestamp: Utc::now(),
             message: Arc::from("plain"),
