@@ -1,5 +1,3 @@
-use regex::Regex;
-
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Query {
     /// Pod name regex (stern-compatible).
@@ -24,6 +22,8 @@ pub enum ResourceKind {
 pub enum QueryParseError {
     #[error("invalid regex: {0}")]
     Regex(#[from] regex::Error),
+    #[error("{0}")]
+    UserRegex(String),
     #[error("unknown resource kind: {0}")]
     UnknownKind(String),
 }
@@ -46,7 +46,8 @@ pub fn parse_query(arg: &str) -> Result<Query, QueryParseError> {
             name: name.to_string(),
         })
     } else {
-        Regex::new(arg)?;
+        crate::regex_limits::compile_user_regex("pod query", arg)
+            .map_err(QueryParseError::UserRegex)?;
         Ok(Query::PodNameRegex(arg.to_string()))
     }
 }

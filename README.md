@@ -63,6 +63,8 @@ rstn deploy/api -n production -f -t
 
 Run `rstn --help` for the full flag list (containers, since/since-time, filters, output format, and more).
 
+User-supplied regular expressions (`--include`, `--exclude`, `--highlight`, pod query, and related flags) are limited to **1024 characters** per pattern and validated before connecting to the cluster.
+
 ## Stern alignment (spec summary)
 
 Behavior is tracked against [stern](https://github.com/stern/stern); not every flag matches yet.
