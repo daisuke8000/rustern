@@ -198,6 +198,8 @@ mod tests {
                     node: None,
                     labels: Arc::new(Labels::default()),
                     uid: "uid".into(),
+                    palette_index: None,
+                    container_palette_index: None,
                 }),
                 timestamp: chrono::Utc::now(),
                 message: std::sync::Arc::from("line"),
