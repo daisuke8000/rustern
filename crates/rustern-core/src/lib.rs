@@ -4,6 +4,7 @@
 pub mod discovery;
 pub mod format_display;
 pub mod pipeline;
+pub mod regex_limits;
 pub mod render;
 pub mod runtime;
 pub mod source;
@@ -15,6 +16,7 @@ pub use discovery::run_resolution::{
 };
 pub use format_display::{TimestampStyle, TimestampZone};
 pub use pipeline::{CompiledFilter, FilterOn, JqError, QueryMode, validate_filter};
+pub use regex_limits::{MAX_USER_REGEX_PATTERN_LEN, compile_user_regex};
 pub use runtime::{
     BackpressurePolicy, CoreRunConfig, FormatterChoice, LossyMetrics, MuxCmd, MuxForwardCore,
     MuxForwardCoreHandles, MuxMetrics, PipelineSpec, PipelineSpecBuilder, RunError, RunOutcome,
