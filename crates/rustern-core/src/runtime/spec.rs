@@ -407,7 +407,11 @@ mod tests {
             token.is_cancelled(),
             "exit-on matches raw JSON (trigger field) before jq rewrites message"
         );
-        assert_eq!(out.len(), 1, "jq output matches include after exit-on fired");
+        assert_eq!(
+            out.len(),
+            1,
+            "jq output matches include after exit-on fired"
+        );
         assert!(
             out[0].as_ref().unwrap().message.contains("visible"),
             "include runs on jq-transformed message without secret"
