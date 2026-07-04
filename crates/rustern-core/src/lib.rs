@@ -17,9 +17,9 @@ pub use format_display::{TimestampStyle, TimestampZone};
 pub use pipeline::{CompiledFilter, FilterOn, JqError, QueryMode, validate_filter};
 pub use runtime::{
     BackpressurePolicy, CoreRunConfig, FormatterChoice, LossyMetrics, MuxCmd, MuxForwardCore,
-    MuxForwardCoreHandles, MuxMetrics, OutputMode, PipelineSpec, PipelineSpecBuilder, RunError,
-    RunOutcome, RunStats, RuntimeFwdConfig, RuntimeStatsConfig, build_log_request_semaphore,
-    forward_to_render, run, run_with_client, spawn_mux_task,
+    MuxForwardCoreHandles, MuxMetrics, PipelineSpec, PipelineSpecBuilder, RunError, RunOutcome,
+    RunStats, RuntimeFwdConfig, RuntimeStatsConfig, build_log_request_semaphore, forward_to_render,
+    run, run_with_client, spawn_mux_task,
 };
 #[cfg(feature = "bench")]
 pub use source::ScriptLogSourceOpener;

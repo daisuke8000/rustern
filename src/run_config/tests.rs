@@ -12,9 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::Cli;
 use rustern_core::discovery::{ContainerLifecycleBucket, ContainerStatePolicy};
-use rustern_core::{
-    FilterOn, FormatterChoice, OutputMode, QueryMode, TimestampStyle, TimestampZone,
-};
+use rustern_core::{FilterOn, FormatterChoice, QueryMode, TimestampStyle, TimestampZone};
 
 fn cli_with_default_ns(args: &[&str]) -> Cli {
     let mut argv = vec!["rstn"];
@@ -118,7 +116,7 @@ users:
     assert!(!cfg.all_namespaces);
     assert_eq!(cfg.namespaces, vec!["default"]);
     assert_eq!(cfg.container, ".*");
-    assert!(matches!(cfg.output, OutputMode::Default));
+    assert!(matches!(cfg.formatter, FormatterChoice::Default { .. }));
     assert!(matches!(
         cfg.formatter,
         FormatterChoice::Default {
@@ -187,7 +185,6 @@ fn maps_flags_namespace_format_and_fwd() {
     let cfg = cli.core_run_config(CancellationToken::new()).unwrap();
     assert_eq!(cfg.namespaces, vec!["kube-system"]);
     assert!(!cfg.pod_log.follow);
-    assert!(matches!(cfg.output, OutputMode::Json));
     assert!(matches!(cfg.formatter, FormatterChoice::Json));
     assert_eq!(cfg.fwd.buffer_size, 8192);
     assert!(cfg.fwd.lossy);

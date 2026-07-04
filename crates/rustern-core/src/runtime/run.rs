@@ -127,10 +127,6 @@ pub async fn run_with_client(
         },
     )?;
 
-    {
-        let _ = &cfg.output; // reserved for future strict validation
-    }
-
     let no_follow_pods = if cfg.pod_log.follow {
         None
     } else {
