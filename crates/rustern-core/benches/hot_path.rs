@@ -1,8 +1,10 @@
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, Stream, StreamExt};
 use regex::Regex;
 use rustern_core::format_display::{TimestampStyle, TimestampZone};
 use rustern_core::parse_log_line;
@@ -14,7 +16,10 @@ use rustern_core::render::LineFormatter;
 use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::highlight::{SternHighlightLineFormatter, compile_stern_highlight_regex};
 use rustern_core::runtime::PipelineSpecBuilder;
-use rustern_core::source::{ContextName, Labels, LogEvent, LogSourceError, SourceKind, SourceMeta};
+use rustern_core::source::{
+    ContextName, Labels, LogEvent, LogSourceError, SourceKey, SourceKind, SourceMeta,
+};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const BATCH: u64 = 1_000;
@@ -265,6 +270,93 @@ fn bench_parse_log_line(c: &mut Criterion) {
     group.finish();
 }
 
+/// Mirrors production cursor-tracking stream poll overhead for A/B comparison
+/// without attach/mux wiring (see DSK-97 / benches README).
+struct BenchCursorTrackingStream<S> {
+    inner: S,
+    key: SourceKey,
+    cursor_tx: mpsc::UnboundedSender<(SourceKey, DateTime<Utc>)>,
+}
+
+impl<S> BenchCursorTrackingStream<S> {
+    fn new(
+        inner: S,
+        key: SourceKey,
+        cursor_tx: mpsc::UnboundedSender<(SourceKey, DateTime<Utc>)>,
+    ) -> Self {
+        Self {
+            inner,
+            key,
+            cursor_tx,
+        }
+    }
+}
+
+impl<S> Stream for BenchCursorTrackingStream<S>
+where
+    S: Stream<Item = Result<LogEvent, LogSourceError>> + Unpin,
+{
+    type Item = Result<LogEvent, LogSourceError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                let _ = self.cursor_tx.send((self.key.clone(), event.timestamp));
+                Poll::Ready(Some(Ok(event)))
+            }
+            other => other,
+        }
+    }
+}
+
+fn bench_cursor_tracking_ab(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let mut group = c.benchmark_group("cursor_tracking_ab");
+    group.throughput(Throughput::Elements(BATCH));
+
+    let msg = plain_message_256();
+    let batch = event_batch(&msg);
+    let key = SourceKey {
+        context: ContextName("ctx".into()),
+        namespace: "default".into(),
+        pod: "frontend-7d8f9c-xk2m9".into(),
+        container: "app".into(),
+        uid: "uid-bench".into(),
+    };
+    let spec = PipelineSpecBuilder::new().build(ExitWatchState::new(CancellationToken::new()));
+
+    for (name, with_cursor) in [("direct", false), ("cursor_wrapped", true)] {
+        group.bench_with_input(
+            BenchmarkId::new("pipeline", name),
+            &with_cursor,
+            |b, &wrap| {
+                b.iter(|| {
+                    let events = batch.clone();
+                    let spec = spec.clone();
+                    let key = key.clone();
+                    let out = rt.block_on(async move {
+                        let base = stream::iter(events.into_iter().map(Ok::<_, LogSourceError>));
+                        if wrap {
+                            let (cursor_tx, mut cursor_rx) = mpsc::unbounded_channel();
+                            let piped = spec.apply(Box::pin(BenchCursorTrackingStream::new(
+                                base, key, cursor_tx,
+                            )));
+                            let out = piped.collect::<Vec<_>>().await;
+                            while cursor_rx.try_recv().is_ok() {}
+                            out
+                        } else {
+                            spec.apply(base).collect::<Vec<_>>().await
+                        }
+                    });
+                    black_box(out);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_include_exclude,
@@ -273,5 +365,6 @@ criterion_group!(
     bench_highlight_formatter,
     bench_pipeline_spec_apply,
     bench_parse_log_line,
+    bench_cursor_tracking_ab,
 );
 criterion_main!(benches);
