@@ -63,7 +63,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::test_support::TestOrchestratorBuilder;
+    use crate::runtime::test_support::{TestOrchestratorBuilder, TestOrchestratorFixture};
     use crate::source::ContextName;
     use crate::source::SourceKey;
     use futures::stream;
@@ -125,7 +125,11 @@ mod tests {
 
     async fn run_scripted_events(
         events: Vec<Event<Pod>>,
-    ) -> (Arc<PodWatchCtx>, mpsc::Receiver<MuxCmd>) {
+    ) -> (
+        TestOrchestratorFixture,
+        Arc<PodWatchCtx>,
+        mpsc::Receiver<MuxCmd>,
+    ) {
         let root = CancellationToken::new();
         let (mux_tx, mux_rx) = mpsc::channel(16);
         let fixture = TestOrchestratorBuilder::new()
@@ -135,7 +139,7 @@ mod tests {
         let w = stream::iter(events.into_iter().map(Ok));
         let h = spawn_watch_task(w, root, mux_tx, Arc::clone(&ctx));
         h.await.expect("watch task panicked");
-        (ctx, mux_rx)
+        (fixture, ctx, mux_rx)
     }
 
     fn drain_mux(rx: &mut mpsc::Receiver<MuxCmd>) -> (usize, usize) {
@@ -174,14 +178,14 @@ mod tests {
             Event::InitApply(test_pod("pod-b", "uid-b", &["app"])),
             Event::InitDone,
         ];
-        let (_ctx, mut mux_rx) = run_scripted_events(events).await;
+        let (_fixture, _ctx, mut mux_rx) = run_scripted_events(events).await;
         wait_for_attach_mux(&mut mux_rx, 2).await;
     }
 
     #[tokio::test]
     async fn apply_event_attaches_admitted_pod() {
         let events = vec![Event::Apply(test_pod("pod-a", "uid-a", &["app"]))];
-        let (_ctx, mut mux_rx) = run_scripted_events(events).await;
+        let (_fixture, _ctx, mut mux_rx) = run_scripted_events(events).await;
         wait_for_attach_mux(&mut mux_rx, 1).await;
     }
 
@@ -189,7 +193,7 @@ mod tests {
     async fn delete_event_drops_streams() {
         let pod = test_pod("pod-a", "uid-a", &["app"]);
         let events = vec![Event::Apply(pod.clone()), Event::Delete(pod.clone())];
-        let (ctx, mut mux_rx) = run_scripted_events(events).await;
+        let (_fixture, ctx, mut mux_rx) = run_scripted_events(events).await;
         let (_, removes) = drain_mux(&mut mux_rx);
         assert_eq!(removes, 1);
         assert_eq!(
@@ -213,7 +217,7 @@ mod tests {
             }),
             Event::InitDone,
         ];
-        let (ctx, mut mux_rx) = run_scripted_events(events).await;
+        let (_fixture, ctx, mut mux_rx) = run_scripted_events(events).await;
         wait_for_attach_mux(&mut mux_rx, 1).await;
         let stale = SourceKey {
             pod: "idle".into(),
