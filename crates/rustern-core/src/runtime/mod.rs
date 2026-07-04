@@ -6,7 +6,6 @@
 //! | [`forward`] | `LossyMetrics`, `forward_to_render` |
 //! | [`attach`] | Pod log attach, concurrent stream start semaphore |
 //! | [`spec`] | [`PipelineSpec`] — compiled pipeline for the `run` stream |
-//! | [`pipeline`] | Internal stage wiring for [`PipelineSpec`] |
 //! | [`run`] | `run` — watch, channels, `tokio::spawn` wiring |
 //! | [`watch`] | Pod watch loop and reconcile handlers |
 //! | [`mux`] | `StreamMap` multiplexing |
@@ -19,7 +18,6 @@ mod forward;
 mod list_pods;
 mod mux;
 mod mux_forward_core;
-mod pipeline;
 mod pod_lifecycle;
 mod pod_meta_cache;
 mod registry;
