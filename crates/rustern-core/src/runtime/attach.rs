@@ -285,6 +285,8 @@ mod tests {
             node: None,
             labels: Arc::new(crate::source::Labels::default()),
             uid: key.uid.clone(),
+            palette_index: None,
+            container_palette_index: None,
         };
         let ts1 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
         let ts2 = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 6).unwrap();
