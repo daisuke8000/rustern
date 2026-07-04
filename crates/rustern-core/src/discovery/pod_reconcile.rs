@@ -1,10 +1,5 @@
 use std::collections::HashSet;
 
-use futures::StreamExt;
-use futures::stream::BoxStream;
-use k8s_openapi::api::core::v1::Pod;
-use kube::runtime::watcher::{Config, Event, watcher};
-
 use crate::source::SourceKey;
 
 fn sort_keys(keys: &mut [SourceKey]) {
@@ -32,13 +27,6 @@ pub fn reconcile(active: &HashSet<SourceKey>, snapshot: &HashSet<SourceKey>) -> 
 pub struct ReconcileDiff {
     pub to_add: Vec<SourceKey>,
     pub to_drop: Vec<SourceKey>,
-}
-
-pub fn pod_event_stream(
-    api: kube::Api<Pod>,
-    cfg: Config,
-) -> BoxStream<'static, Result<Event<Pod>, kube::runtime::watcher::Error>> {
-    watcher(api, cfg).boxed()
 }
 
 #[cfg(test)]

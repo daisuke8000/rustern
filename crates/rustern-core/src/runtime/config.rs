@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::discovery::ContainerDiscoverOpts;
 use crate::discovery::context::ContextSelector;
 use crate::discovery::pod_condition::PodConditionFilter;
-use crate::discovery::pod_watcher::ContainerDiscoverOpts;
 use crate::format_display::{TimestampStyle, TimestampZone};
 use crate::pipeline::{FilterOn, QueryMode};
 use crate::source::pod_log::PodLogRequest;

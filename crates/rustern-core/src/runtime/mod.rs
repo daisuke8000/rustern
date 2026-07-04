@@ -5,7 +5,7 @@
 //! | [`config`] | `CoreRunConfig`, formatter choice, errors/results |
 //! | [`forward`] | `LossyMetrics`, `forward_to_render`, log concurrency semaphore |
 //! | [`spec`] | [`PipelineSpec`] — compiled pipeline for the `run` stream |
-//! | [`pipeline`] | Internal stage wiring (`apply_pipeline`; migration only) |
+//! | [`pipeline`] | Internal stage wiring for [`PipelineSpec`] |
 //! | [`run`] | `run` — watch, channels, `tokio::spawn` wiring |
 //! | [`watch`] | Pod watch loop and reconcile handlers |
 //! | [`attach`] | Pod log stream attach |
@@ -36,8 +36,5 @@ pub use forward::{
     LossyMetrics, MuxMetrics, RunStats, build_log_request_semaphore, forward_to_render,
 };
 pub use mux::{MuxCmd, spawn_mux_task};
-// Migration-only exports; use `PipelineSpec` instead (scheduled for removal).
-#[doc(hidden)]
-pub use pipeline::{PipelineStages, apply_pipeline};
 pub use run::{run, run_with_client};
 pub use spec::{PipelineSpec, PipelineSpecBuilder};

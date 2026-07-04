@@ -13,7 +13,7 @@ use k8s_openapi::api::core::v1::Pod;
 use regex::Regex;
 
 use crate::discovery::pod_condition::{PodConditionFilter, pod_matches_condition};
-use crate::discovery::pod_watcher::{ContainerDiscoverOpts, keys_from_pod};
+use crate::discovery::{ContainerDiscoverOpts, keys_from_pod};
 use crate::source::{ContextName, SourceKey};
 
 /// Event-time admission policy built once in [`super::run::run`].
@@ -138,7 +138,7 @@ mod tests {
     };
     use kube::api::ObjectMeta;
 
-    use crate::discovery::pod_watcher::{ContainerLifecycleBucket, ContainerStatePolicy};
+    use crate::discovery::{ContainerLifecycleBucket, ContainerStatePolicy};
 
     fn test_policy() -> WatchAdmissionPolicyBuilder {
         WatchAdmissionPolicyBuilder::new()

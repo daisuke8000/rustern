@@ -12,9 +12,7 @@ use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_admission::WatchAdmissionPolicy;
 use super::watch_ctx::{AttachDeps, PodWatchCtx};
-use crate::discovery::pod_watcher::{
-    ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
-};
+use crate::discovery::{ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy};
 use crate::source::ContextName;
 use crate::source::log_opener::PodLogSourceOpener;
 use crate::source::pod_log::PodLogRequest;

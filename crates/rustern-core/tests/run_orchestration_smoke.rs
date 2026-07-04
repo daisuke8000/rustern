@@ -50,7 +50,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ListMeta, ObjectMeta};
 use kube::api::ObjectList;
 use kube::core::TypeMeta;
 use rustern_core::discovery::context::ContextSelector;
-use rustern_core::discovery::pod_watcher::{
+use rustern_core::discovery::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
 use rustern_core::pipeline::{FilterOn, QueryMode};

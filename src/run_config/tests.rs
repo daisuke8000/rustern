@@ -11,7 +11,7 @@ use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::Cli;
-use rustern_core::discovery::pod_watcher::{ContainerLifecycleBucket, ContainerStatePolicy};
+use rustern_core::discovery::{ContainerLifecycleBucket, ContainerStatePolicy};
 use rustern_core::{
     FilterOn, FormatterChoice, OutputMode, QueryMode, TimestampStyle, TimestampZone,
 };

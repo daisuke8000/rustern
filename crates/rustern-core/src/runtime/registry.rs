@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use super::attach::spawn_attach_pod_log;
 use super::mux::MuxCmd;
 use super::watch_ctx::PodWatchCtx;
-use crate::discovery::pod_watcher::reconcile;
+use crate::discovery::reconcile;
 use crate::source::SourceKey;
 
 pub(crate) struct PodStreamRegistry {
