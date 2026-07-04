@@ -6,6 +6,7 @@ use kube::config::{KubeConfigOptions, Kubeconfig};
 use secrecy::SecretBox;
 
 use super::exec_resolver::resolve_exec_token;
+use crate::source::ContextName;
 
 #[derive(Debug, Clone, Default)]
 pub struct ContextSelector {
@@ -141,18 +142,20 @@ fn apply_exec_token_to_kubeconfig(kubeconfig: &mut Kubeconfig, ctx_name: &str) {
     auth_info.exec = None;
 }
 
-pub async fn build_client(selector: &ContextSelector) -> Result<Client, ContextError> {
+pub async fn build_client(
+    selector: &ContextSelector,
+) -> Result<(Client, ContextName), ContextError> {
     let mut kubeconfig = resolve_kubeconfig(selector)?;
     let ctx_name = pick_context_name(&kubeconfig, selector)?.to_string();
-    let ctx_for_exec = ctx_name.clone();
+    let context_name = ContextName(ctx_name.clone());
     kubeconfig = tokio::task::spawn_blocking(move || {
-        apply_exec_token_to_kubeconfig(&mut kubeconfig, &ctx_for_exec);
+        apply_exec_token_to_kubeconfig(&mut kubeconfig, &ctx_name);
         kubeconfig
     })
     .await
     .map_err(|e| ContextError::Client(format!("exec resolver task failed: {e}")))?;
     let opts = KubeConfigOptions {
-        context: Some(ctx_name),
+        context: Some(context_name.0.clone()),
         cluster: None,
         user: None,
     };
@@ -160,7 +163,8 @@ pub async fn build_client(selector: &ContextSelector) -> Result<Client, ContextE
         .await
         .map_err(|e| ContextError::Parse(e.to_string()))?;
     config.connect_timeout = Some(Duration::from_secs(30));
-    Client::try_from(config).map_err(|e| ContextError::Client(e.to_string()))
+    let client = Client::try_from(config).map_err(|e| ContextError::Client(e.to_string()))?;
+    Ok((client, context_name))
 }
 
 #[cfg(test)]

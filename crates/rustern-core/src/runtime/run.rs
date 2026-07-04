@@ -24,7 +24,7 @@ use super::spec::PipelineSpec;
 use super::watch::spawn_watch_task;
 use super::watch_admission::WatchAdmissionPolicy;
 use super::watch_ctx::{AttachDeps, PodWatchCtx};
-use crate::discovery::context::{build_client, pick_context_name, resolve_kubeconfig};
+use crate::discovery::context::build_client;
 use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
 use crate::pipeline::ExitWatchState;
 use crate::render::setup::{RenderSetupError, build_line_formatter};
@@ -91,14 +91,15 @@ fn spawn_pipeline_forward_task(
 
 /// Main entry: watcher → `StreamMap` → pipeline → stdout.
 pub async fn run(cfg: CoreRunConfig) -> Result<RunOutcome, RunError> {
-    let client = build_client(&cfg.context).await?;
-    run_with_client(client, cfg).await
+    let (client, context_name) = build_client(&cfg.context).await?;
+    run_with_client(client, context_name, cfg).await
 }
 
 /// Run with a caller-supplied Kubernetes client (integration tests / mock apiserver).
 #[doc(hidden)]
 pub async fn run_with_client(
     client: kube::Client,
+    context_name: ContextName,
     cfg: CoreRunConfig,
 ) -> Result<RunOutcome, RunError> {
     if cfg.only_log_lines {
@@ -119,10 +120,6 @@ pub async fn run_with_client(
     let pod_regex = plan.pod_regex;
     let watch_cfg = plan.watch_cfg;
     let list_params = plan.list_params;
-
-    let kube_cfg = resolve_kubeconfig(&cfg.context)?;
-    let ctx_name = pick_context_name(&kube_cfg, &cfg.context)?;
-    let context_name = ContextName(ctx_name.to_string());
 
     let exit_watch = ExitWatchState::new(cfg.root_token.clone());
     let pipeline = PipelineSpec::from_run_config(&cfg, exit_watch)?;
