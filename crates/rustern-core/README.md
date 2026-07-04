@@ -281,7 +281,7 @@ When the user passes **multiple explicit namespaces** (`-n ns1 -n ns2`), `runtim
 | **Current: cluster watch + client filter** | One watcher; simple RBAC if cluster-scoped list/watch is allowed; label/field selectors still server-side | Delivers events for pods outside the requested namespaces; CPU scales with cluster churn |
 | **Per-namespace watchers + fan-in** | Watch traffic scoped to requested namespaces | N concurrent watches; merge/dedup complexity; RBAC must allow list/watch in each namespace |
 
-**Recommendation (2026-07):** keep the current approach until measured watch overhead on a representative large cluster. If profiling shows admission filtering dominates, prototype per-namespace fan-in behind the existing `PodWatchPlan` seam and compare event rates before switching defaults. `-l` / `--field-selector` already reduce server-side volume when set.
+**Recommendation (2026-07):** keep the current approach until measured watch overhead on a representative large cluster. If profiling shows admission filtering dominates, prototype per-namespace fan-in behind the existing `PodWatchPlan` seam and compare event rates before switching defaults. `-l` (label selector) and `--field-selector` (field selector) are distinct options that already reduce server-side volume when set.
 
 ## v0.1 scope and notes
 
