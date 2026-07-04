@@ -4,8 +4,11 @@ mod common;
 
 use std::time::Duration;
 
-use common::{MockApiserverConfig, serve_mock_apiserver, test_context_name, test_pod};
-use rustern_core::{CoreRunConfig, RunError, run_with_client};
+use common::{
+    MockApiserverConfig, core_run_config_for_test_with_max_log_requests, mock_client_pair,
+    serve_mock_apiserver, test_context_name, test_pod,
+};
+use rustern_core::{RunError, run_with_client};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -18,11 +21,7 @@ async fn follow_mode_cancels_on_max_log_requests_exhausted() {
         test_pod("pod-c", "uid-c", "app"),
     ];
 
-    let (mock, handle) = tower_test::mock::pair::<
-        http::Request<kube::client::Body>,
-        http::Response<kube::client::Body>,
-    >();
-    let client = kube::Client::new(mock, "default");
+    let (client, handle) = mock_client_pair();
     let server = tokio::spawn(serve_mock_apiserver(
         handle,
         MockApiserverConfig {
@@ -33,7 +32,7 @@ async fn follow_mode_cancels_on_max_log_requests_exhausted() {
     ));
 
     let root_token = CancellationToken::new();
-    let cfg = CoreRunConfig::for_test_with_max_log_requests(true, 1, root_token);
+    let cfg = core_run_config_for_test_with_max_log_requests(true, 1, root_token);
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),

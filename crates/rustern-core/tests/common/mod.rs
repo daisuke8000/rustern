@@ -18,10 +18,88 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ListMeta, ObjectMeta};
 use kube::api::ObjectList;
 use kube::core::TypeMeta;
+use rustern_core::discovery::context::ContextSelector;
+use rustern_core::discovery::{
+    ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
+};
+use rustern_core::pipeline::{FilterOn, QueryMode};
 use rustern_core::source::ContextName;
+use rustern_core::source::pod_log::PodLogRequest;
+use rustern_core::{
+    BackpressurePolicy, CoreRunConfig, FormatterChoice, OutputMode, RuntimeFwdConfig,
+};
+use tokio_util::sync::CancellationToken;
 
 pub fn test_context_name() -> ContextName {
     ContextName("default".into())
+}
+
+pub fn mock_client_pair() -> (
+    kube::Client,
+    tower_test::mock::Handle<Request<kube::client::Body>, Response<kube::client::Body>>,
+) {
+    let (mock, handle) =
+        tower_test::mock::pair::<Request<kube::client::Body>, Response<kube::client::Body>>();
+    (kube::Client::new(mock, "default"), handle)
+}
+
+pub fn core_run_config_for_test(follow: bool, root_token: CancellationToken) -> CoreRunConfig {
+    core_run_config_for_test_with_max_log_requests(follow, 5, root_token)
+}
+
+pub fn core_run_config_for_test_with_max_log_requests(
+    follow: bool,
+    max_log_requests: usize,
+    root_token: CancellationToken,
+) -> CoreRunConfig {
+    use std::collections::HashSet;
+
+    CoreRunConfig {
+        context: ContextSelector::default(),
+        query: ".*".into(),
+        namespaces: vec!["default".into()],
+        all_namespaces: false,
+        selector: None,
+        field_selector: None,
+        node: None,
+        exclude_pod: Vec::new(),
+        container: ".*".into(),
+        exclude_container: Vec::new(),
+        container_discovery: ContainerDiscoverOpts {
+            include_init_containers: false,
+            include_ephemeral_containers: false,
+            state_policy: ContainerStatePolicy::Subset(HashSet::from([
+                ContainerLifecycleBucket::Running,
+            ])),
+        },
+        pod_condition: None,
+        pod_log: PodLogRequest {
+            follow,
+            ..Default::default()
+        },
+        cursor_reconnect: false,
+        include: Vec::new(),
+        exclude: Vec::new(),
+        highlight: Vec::new(),
+        only_log_lines: true,
+        filter_on: FilterOn::Original,
+        json_query: None,
+        json_query_mode: QueryMode::Filter,
+        level_key: None,
+        exit_on: Vec::new(),
+        exit_on_level: None,
+        output: OutputMode::Raw,
+        formatter: FormatterChoice::Raw,
+        diff_container: false,
+        fwd: RuntimeFwdConfig {
+            buffer_size: 64,
+            lossy: false,
+            mux_policy: BackpressurePolicy::Blocking,
+            stats: None,
+            max_log_requests,
+        },
+        root_token,
+    }
 }
 
 pub fn test_pod(name: &str, uid: &str, container: &str) -> Pod {
@@ -133,6 +211,8 @@ pub async fn serve_mock_apiserver(
 
         if path.contains("/log") {
             if config.hold_first_log {
+                // Intentionally blocks this handler: max-log-requests is enforced in attach
+                // before later pods reach the mock; only the first held stream matters.
                 let n = in_flight_logs.fetch_add(1, Ordering::Relaxed);
                 if n == 0 {
                     tokio::time::sleep(Duration::from_secs(30)).await;

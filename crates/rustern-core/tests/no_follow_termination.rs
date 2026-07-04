@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{
-    MockApiserverConfig, join_mock_server, serve_mock_apiserver, test_context_name, test_pod,
+    MockApiserverConfig, core_run_config_for_test, join_mock_server, mock_client_pair,
+    serve_mock_apiserver, test_context_name, test_pod,
 };
-use rustern_core::{CoreRunConfig, run_with_client};
+use rustern_core::run_with_client;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -21,11 +22,7 @@ async fn no_follow_exits_after_all_logs_consumed() {
     let expected_log_requests = pods.len();
     let log_lines_per_pod = 1usize;
 
-    let (mock, handle) = tower_test::mock::pair::<
-        http::Request<kube::client::Body>,
-        http::Response<kube::client::Body>,
-    >();
-    let client = kube::Client::new(mock, "default");
+    let (client, handle) = mock_client_pair();
     let log_requests_count = Arc::new(AtomicUsize::new(0));
     let served = Arc::clone(&log_requests_count);
     let server = tokio::spawn(serve_mock_apiserver(
@@ -39,7 +36,7 @@ async fn no_follow_exits_after_all_logs_consumed() {
     ));
 
     let root_token = CancellationToken::new();
-    let cfg = CoreRunConfig::for_test(false, root_token);
+    let cfg = core_run_config_for_test(false, root_token);
 
     let outcome = tokio::time::timeout(
         Duration::from_secs(2),
@@ -63,11 +60,7 @@ async fn no_follow_exits_after_all_logs_consumed() {
 async fn follow_mode_does_not_auto_exit_after_logs_eof() {
     let pods = vec![test_pod("pod-a", "uid-a", "app")];
 
-    let (mock, handle) = tower_test::mock::pair::<
-        http::Request<kube::client::Body>,
-        http::Response<kube::client::Body>,
-    >();
-    let client = kube::Client::new(mock, "default");
+    let (client, handle) = mock_client_pair();
     let log_requests_count = Arc::new(AtomicUsize::new(0));
     let served = Arc::clone(&log_requests_count);
     let server = tokio::spawn(serve_mock_apiserver(
@@ -82,7 +75,7 @@ async fn follow_mode_does_not_auto_exit_after_logs_eof() {
 
     let root_token = CancellationToken::new();
     let cancel = root_token.clone();
-    let cfg = CoreRunConfig::for_test(true, root_token);
+    let cfg = core_run_config_for_test(true, root_token);
 
     let mut run_h =
         tokio::spawn(async move { run_with_client(client, test_context_name(), cfg).await });
