@@ -16,7 +16,7 @@ use rustern_core::render::default_renderer::DefaultLineFormatter;
 use rustern_core::render::{LineFormatter, RenderCommand, flush_ticker};
 use rustern_core::runtime::{
     BackpressurePolicy, LossyMetrics, MuxCmd, MuxForwardCore, MuxMetrics, PipelineSpecBuilder,
-    RunStats, RuntimeFwdConfig, forward_to_render, spawn_mux_task,
+    RunStats, RuntimeFwdConfig, RuntimeStatsConfig, forward_to_render, spawn_mux_task,
 };
 use rustern_core::source::pod_log::{PodLogRequest, PodLogSource};
 use rustern_core::source::{
@@ -379,7 +379,9 @@ async fn run_production_core_load() -> (u64, u64) {
         buffer_size: BLOCKING_RENDER_BUFFER,
         lossy: false,
         mux_policy: BackpressurePolicy::Blocking,
-        stats: None,
+        stats: Some(RuntimeStatsConfig {
+            interval: Duration::from_secs(30),
+        }),
         max_log_requests: pods,
     };
     let stats = RunStats::from_fwd(&fwd_cfg);
