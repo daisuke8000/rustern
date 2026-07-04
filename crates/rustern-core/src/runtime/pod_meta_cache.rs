@@ -316,7 +316,10 @@ mod tests {
             uid: "uid-1".into(),
         };
         let snap = cache.lookup(&key).await;
-        assert_eq!(snap.labels.0.get("tier").map(String::as_str), Some("worker"));
+        assert_eq!(
+            snap.labels.0.get("tier").map(String::as_str),
+            Some("worker")
+        );
     }
 
     #[tokio::test]
