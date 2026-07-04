@@ -21,7 +21,7 @@ pub enum BackpressurePolicy {
 }
 
 impl BackpressurePolicy {
-    /// Map the legacy forward `--lossy` flag to a mux-tier policy (same knob until split).
+    /// Map the `--lossy` flag to a mux-tier policy (same CLI knob for both tiers until split).
     pub fn from_lossy(lossy: bool) -> Self {
         if lossy { Self::Lossy } else { Self::Blocking }
     }
@@ -40,9 +40,8 @@ pub struct RuntimeFwdConfig {
     /// Render channel capacity.
     pub buffer_size: usize,
     /// Skip lines instead of blocking when the forward → render queue is full (tier 2).
+    /// Mux-tier policy (tier 1) is derived via [`BackpressurePolicy::from_lossy`] until split.
     pub lossy: bool,
-    /// Skip lines instead of blocking when the mux → raw pipeline queue is full (tier 1).
-    pub mux_policy: BackpressurePolicy,
     /// Optional stderr stats reporter.
     pub stats: Option<RuntimeStatsConfig>,
     /// Upper bound on concurrent pod log streams.
@@ -56,26 +55,11 @@ impl RuntimeFwdConfig {
 
     /// Mux-tier backpressure policy (`spawn_mux_task`).
     pub fn resolved_mux_policy(&self) -> BackpressurePolicy {
-        self.mux_policy
+        BackpressurePolicy::from_lossy(self.lossy)
     }
 }
 
-/// High-level stdout rendering mode (`run` selects a formatter from this plus [`FormatterChoice`]).
-#[derive(Debug, Clone)]
-pub enum OutputMode {
-    /// Human-readable prefixed lines via [`FormatterChoice::Default`].
-    Default,
-    /// Raw message-only lines (no prefixes).
-    Raw,
-    /// One JSON object per log line (`message` rewritten when jq is enabled).
-    Json,
-    /// Stern-compatible extended JSON (plain metadata fields).
-    ExtJson,
-    /// Pretty-printed [`OutputMode::ExtJson`].
-    PpExtJson,
-}
-
-/// Line formatter preset matching [`OutputMode`] (timing and color knobs apply to the default formatter only).
+/// Line formatter preset for stdout (timing and color knobs apply to the default variant only).
 #[derive(Debug, Clone)]
 pub enum FormatterChoice {
     /// Prefix / color / timestamps for terminal-friendly output.
@@ -147,8 +131,6 @@ pub struct CoreRunConfig {
     pub exit_on: Vec<String>,
     /// CI/smoke: exit when classified log level is at or above this threshold.
     pub exit_on_level: Option<crate::pipeline::ExitOnLevel>,
-    /// Output family (default/raw/json skeleton).
-    pub output: OutputMode,
     /// Concrete formatter knobs.
     pub formatter: FormatterChoice,
     /// Per-container palette when true (stern `--diff-container` / `-d`).
@@ -195,7 +177,6 @@ mod tests {
         let fwd = RuntimeFwdConfig {
             buffer_size: 8192,
             lossy: false,
-            mux_policy: BackpressurePolicy::Blocking,
             stats: None,
             max_log_requests: 10,
         };
@@ -207,7 +188,6 @@ mod tests {
         let fwd = RuntimeFwdConfig {
             buffer_size: 0,
             lossy: false,
-            mux_policy: BackpressurePolicy::Blocking,
             stats: None,
             max_log_requests: 10,
         };
@@ -227,16 +207,15 @@ mod tests {
     }
 
     #[test]
-    fn resolved_mux_policy_returns_configured_policy() {
+    fn resolved_mux_policy_derives_from_lossy() {
         let blocking = RuntimeFwdConfig {
             buffer_size: 1,
-            lossy: true,
-            mux_policy: BackpressurePolicy::Blocking,
+            lossy: false,
             stats: None,
             max_log_requests: 1,
         };
         let lossy = RuntimeFwdConfig {
-            mux_policy: BackpressurePolicy::Lossy,
+            lossy: true,
             ..blocking.clone()
         };
         assert_eq!(blocking.resolved_mux_policy(), BackpressurePolicy::Blocking);

@@ -44,7 +44,6 @@ fn fwd_cfg(lossy: bool) -> RuntimeFwdConfig {
     RuntimeFwdConfig {
         buffer_size: RENDER_BUFFER,
         lossy,
-        mux_policy: BackpressurePolicy::from_lossy(lossy),
         stats: None,
         max_log_requests: 50,
     }

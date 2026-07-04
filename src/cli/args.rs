@@ -321,7 +321,7 @@ pub enum ColorArg {
     Never,
 }
 
-/// High-level output layout (mirrors [`rustern_core::OutputMode`]).
+/// High-level output layout (mirrors [`rustern_core::FormatterChoice`]).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum FormatArg {
     #[default]

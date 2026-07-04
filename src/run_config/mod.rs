@@ -10,7 +10,7 @@ use rustern_core::discovery::{
     ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy,
 };
 use rustern_core::{
-    CoreRunConfig, FormatterChoice, OutputMode, PodLogRequest, RuntimeFwdConfig, RuntimeStatsConfig,
+    CoreRunConfig, FormatterChoice, PodLogRequest, RuntimeFwdConfig, RuntimeStatsConfig,
 };
 use rustern_core::{FilterOn, QueryMode, TimestampStyle, TimestampZone};
 
@@ -112,31 +112,22 @@ impl Cli {
         let resolution = resolved_run(self)?;
         let all_namespaces = resolution.all_namespaces();
 
-        let output_and_formatter = match self.format {
-            FormatArg::Default => (
-                OutputMode::Default,
-                FormatterChoice::Default {
-                    timestamp_style,
-                    timestamp_zone,
-                    color_enabled: match self.color {
-                        ColorArg::Never => false,
-                        ColorArg::Always => true,
-                        ColorArg::Auto => io::stdout().is_terminal(),
-                    },
-                    pod_colors: resolved_pod_colors(self),
-                    container_colors: resolved_container_colors(self),
+        let formatter = match self.format {
+            FormatArg::Default => FormatterChoice::Default {
+                timestamp_style,
+                timestamp_zone,
+                color_enabled: match self.color {
+                    ColorArg::Never => false,
+                    ColorArg::Always => true,
+                    ColorArg::Auto => io::stdout().is_terminal(),
                 },
-            ),
-            FormatArg::Json => (OutputMode::Json, FormatterChoice::Json),
-            FormatArg::ExtJson => (
-                OutputMode::ExtJson,
-                FormatterChoice::ExtJson { all_namespaces },
-            ),
-            FormatArg::PpExtJson => (
-                OutputMode::PpExtJson,
-                FormatterChoice::PpExtJson { all_namespaces },
-            ),
-            FormatArg::Raw => (OutputMode::Raw, FormatterChoice::Raw),
+                pod_colors: resolved_pod_colors(self),
+                container_colors: resolved_container_colors(self),
+            },
+            FormatArg::Json => FormatterChoice::Json,
+            FormatArg::ExtJson => FormatterChoice::ExtJson { all_namespaces },
+            FormatArg::PpExtJson => FormatterChoice::PpExtJson { all_namespaces },
+            FormatArg::Raw => FormatterChoice::Raw,
         };
 
         let (query, namespaces, all_namespaces) = resolution.into_resolved();
@@ -192,13 +183,11 @@ impl Cli {
                 .as_deref()
                 .map(rustern_core::pipeline::ExitOnLevel::parse)
                 .transpose()?,
-            output: output_and_formatter.0,
-            formatter: output_and_formatter.1,
+            formatter,
             diff_container: self.diff_container,
             fwd: RuntimeFwdConfig {
                 buffer_size: self.buffer_size,
                 lossy: self.lossy,
-                mux_policy: rustern_core::runtime::BackpressurePolicy::from_lossy(self.lossy),
                 stats: self.stats.then_some(RuntimeStatsConfig {
                     interval: self.stats_interval,
                 }),

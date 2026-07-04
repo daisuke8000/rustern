@@ -391,7 +391,6 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 1024,
                 lossy: false,
-                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },
@@ -447,7 +446,6 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 1,
                 lossy: true,
-                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },
@@ -499,7 +497,6 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 1,
                 lossy: true,
-                mux_policy: BackpressurePolicy::Blocking,
                 max_log_requests: 10,
                 stats: Some(crate::runtime::RuntimeStatsConfig {
                     interval: Duration::from_secs(30),
@@ -560,7 +557,6 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 8,
                 lossy: false,
-                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },
@@ -599,7 +595,6 @@ mod tests {
             RuntimeFwdConfig {
                 buffer_size: 8,
                 lossy: false,
-                mux_policy: BackpressurePolicy::Blocking,
                 stats: None,
                 max_log_requests: 10,
             },

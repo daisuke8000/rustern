@@ -26,7 +26,7 @@ use rustern_core::pipeline::{FilterOn, QueryMode};
 use rustern_core::source::ContextName;
 use rustern_core::source::pod_log::PodLogRequest;
 use rustern_core::{
-    BackpressurePolicy, CoreRunConfig, FormatterChoice, OutputMode, RuntimeFwdConfig,
+    CoreRunConfig, FormatterChoice, RuntimeFwdConfig,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -88,13 +88,11 @@ pub fn core_run_config_for_test_with_max_log_requests(
         level_key: None,
         exit_on: Vec::new(),
         exit_on_level: None,
-        output: OutputMode::Raw,
         formatter: FormatterChoice::Raw,
         diff_container: false,
         fwd: RuntimeFwdConfig {
             buffer_size: 64,
             lossy: false,
-            mux_policy: BackpressurePolicy::Blocking,
             stats: None,
             max_log_requests,
         },

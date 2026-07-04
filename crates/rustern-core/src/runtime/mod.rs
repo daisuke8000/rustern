@@ -33,8 +33,8 @@ mod watch_ctx;
 
 pub use attach::build_log_request_semaphore;
 pub use config::{
-    BackpressurePolicy, CoreRunConfig, FormatterChoice, OutputMode, RunError, RunOutcome,
-    RuntimeFwdConfig, RuntimeStatsConfig,
+    BackpressurePolicy, CoreRunConfig, FormatterChoice, RunError, RunOutcome, RuntimeFwdConfig,
+    RuntimeStatsConfig,
 };
 pub use forward::{LossyMetrics, MuxMetrics, RunStats, forward_to_render};
 pub use mux::{MuxCmd, spawn_mux_task};
