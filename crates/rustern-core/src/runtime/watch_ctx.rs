@@ -27,6 +27,10 @@ pub(crate) struct AttachDeps {
     pub(crate) pod_meta: PodMetaCache,
 }
 
+pub(crate) fn should_track_cursors(cursor_reconnect: bool, follow: bool) -> bool {
+    cursor_reconnect && follow
+}
+
 /// Composed watch orchestration context: admission policy plus attach/runtime deps.
 #[derive(Clone)]
 pub(crate) struct PodWatchCtx {
