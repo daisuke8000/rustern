@@ -11,6 +11,7 @@ pub mod log_opener;
 pub mod parsed_json;
 pub mod pod_log;
 pub mod pod_meta;
+pub(crate) mod retry;
 
 pub use parsed_json::ParsedJson;
 

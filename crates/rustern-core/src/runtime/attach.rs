@@ -17,6 +17,7 @@ use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_ctx::PodWatchCtx;
 use crate::source::ContextName;
+use crate::source::retry::full_jitter_backoff;
 use crate::source::{BoxedLogStream, LogEvent, LogSourceError, SourceKey, SourceKind, SourceMeta};
 
 const MAX_REOPEN_START_RETRIES: u32 = 5;
@@ -238,7 +239,12 @@ async fn attach_pod_log_stream(p: AttachPodLogParams) {
                     && reopen_start_failures < MAX_REOPEN_START_RETRIES
                 {
                     reopen_start_failures += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    let delay = full_jitter_backoff(250, reopen_start_failures - 1);
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {}
+                        _ = p.pod_token.cancelled() => return,
+                        _ = p.ctx.attach.root_child.cancelled() => return,
+                    }
                     continue;
                 }
                 if reopen_start_failures >= MAX_REOPEN_START_RETRIES {

@@ -1958,6 +1958,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "criterion",
+ "fastrand",
  "futures",
  "http",
  "http-body-util",
