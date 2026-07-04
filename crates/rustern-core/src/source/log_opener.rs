@@ -39,7 +39,7 @@ impl LogSourceOpener for PodLogSourceOpener {
         meta: Arc<SourceMeta>,
         token: CancellationToken,
         request: PodLogRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
+    ) -> OpenLogSourceFuture<'_> {
         let client = self.client.clone();
         Box::pin(async move {
             let src = PodLogSource::start(client, meta, token, request).await?;
@@ -91,7 +91,7 @@ impl LogSourceOpener for ScriptLogSourceOpener {
         meta: Arc<SourceMeta>,
         token: CancellationToken,
         _request: PodLogRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn LogSource>, LogSourceError>> + Send + '_>> {
+    ) -> OpenLogSourceFuture<'_> {
         let script = {
             let mut scripts = self.scripts.lock().expect("script queue");
             if scripts.is_empty() {
