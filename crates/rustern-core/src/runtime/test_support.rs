@@ -156,11 +156,7 @@ impl TestOrchestratorBuilder {
                 sem: Arc::new(Semaphore::new(self.sem_permits)),
                 follow_limit_notifier: None,
                 pod_meta: PodMetaCache::new(),
-                color_assign: ColorAssignOpts {
-                    pod_colors: false,
-                    container_colors: false,
-                    diff_container: false,
-                },
+                color_assign: ColorAssignOpts::default(),
             },
         };
         TestOrchestratorFixture {

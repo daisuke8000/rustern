@@ -56,22 +56,23 @@ fn push_wall_prefix(
         },
         TimestampStyle::SternShort => match zone {
             TimestampZone::Utc => {
-                buf.push_str(&dt_utc.format("%m-%d %H:%M:%S").to_string());
+                use std::fmt::Write as _;
+                let _ = write!(buf, "{}", dt_utc.format("%m-%d %H:%M:%S"));
             }
             TimestampZone::Local => {
-                buf.push_str(
-                    &dt_utc
-                        .with_timezone(&Local)
-                        .format("%m-%d %H:%M:%S")
-                        .to_string(),
+                use std::fmt::Write as _;
+                let _ = write!(
+                    buf,
+                    "{}",
+                    dt_utc.with_timezone(&Local).format("%m-%d %H:%M:%S")
                 );
             }
             TimestampZone::Iana(tz) => {
-                buf.push_str(
-                    &dt_utc
-                        .with_timezone(&tz)
-                        .format("%m-%d %H:%M:%S")
-                        .to_string(),
+                use std::fmt::Write as _;
+                let _ = write!(
+                    buf,
+                    "{}",
+                    dt_utc.with_timezone(&tz).format("%m-%d %H:%M:%S")
                 );
             }
         },

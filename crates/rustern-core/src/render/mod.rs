@@ -51,6 +51,7 @@ where
         batch.clear();
         let n = rx.recv_many(&mut batch, RENDER_RECV_BATCH).await;
         if n == 0 {
+            buf.flush().await?;
             break;
         }
         for cmd in batch.drain(..) {
@@ -58,9 +59,7 @@ where
                 RenderCommand::Line(ev) => {
                     line_buf.clear();
                     let min_cap = ev.message.len().saturating_add(64);
-                    if line_buf.capacity() < min_cap {
-                        line_buf.reserve(min_cap - line_buf.capacity());
-                    }
+                    line_buf.reserve(min_cap);
                     formatter.format_into(&ev, &mut line_buf);
                     buf.write_all(line_buf.as_bytes()).await?;
                 }

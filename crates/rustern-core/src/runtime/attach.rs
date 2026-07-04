@@ -328,12 +328,13 @@ mod tests {
                 labels: Labels(labels),
             },
         );
-        let no_colors = ColorAssignOpts {
-            pod_colors: false,
-            container_colors: false,
-            diff_container: false,
-        };
-        let meta = source_meta_for_key(&ContextName("ctx".into()), &cache, &key, no_colors).await;
+        let meta = source_meta_for_key(
+            &ContextName("ctx".into()),
+            &cache,
+            &key,
+            ColorAssignOpts::default(),
+        )
+        .await;
         assert_eq!(meta.node.as_deref(), Some("worker-1"));
         assert_eq!(meta.labels.0.get("app").map(String::as_str), Some("api"));
     }

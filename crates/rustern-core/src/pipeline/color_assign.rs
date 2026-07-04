@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use crate::source::{LogEvent, LogSourceError, SourceMeta};
 
 /// Knobs for [`color_assign`] (stern `--pod-colors` / `--container-colors` / `--diff-container`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ColorAssignOpts {
     pub pod_colors: bool,
     pub container_colors: bool,
@@ -18,17 +18,21 @@ fn stable_palette_index(key: &str) -> u8 {
     (h.finish() % 16) as u8
 }
 
+fn container_palette_key(meta: &SourceMeta, opts: ColorAssignOpts) -> &str {
+    if opts.diff_container {
+        meta.container.as_str()
+    } else {
+        meta.pod.as_str()
+    }
+}
+
 pub fn apply_palette_to_meta(meta: &mut SourceMeta, opts: ColorAssignOpts) {
     if opts.pod_colors {
         meta.palette_index = Some(stable_palette_index(&meta.pod));
     }
     if opts.container_colors {
-        let key = if opts.diff_container {
-            meta.container.as_str()
-        } else {
-            meta.pod.as_str()
-        };
-        meta.container_palette_index = Some(stable_palette_index(key));
+        meta.container_palette_index =
+            Some(stable_palette_index(container_palette_key(meta, opts)));
     }
 }
 
@@ -45,12 +49,9 @@ where
                 ev.palette_index = Some(stable_palette_index(&ev.source.pod));
             }
             if opts.container_colors && ev.container_palette_index.is_none() {
-                let key = if opts.diff_container {
-                    ev.source.container.as_str()
-                } else {
-                    ev.source.pod.as_str()
-                };
-                ev.container_palette_index = Some(stable_palette_index(key));
+                ev.container_palette_index = Some(stable_palette_index(container_palette_key(
+                    &ev.source, opts,
+                )));
             }
             ev
         })
