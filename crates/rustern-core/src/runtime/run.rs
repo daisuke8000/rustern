@@ -18,7 +18,7 @@ use super::pod_meta_cache::PodMetaCache;
 use super::spec::PipelineSpec;
 use super::watch::spawn_watch_task;
 use super::watch_admission::WatchAdmissionPolicy;
-use super::watch_ctx::{AttachDeps, PodWatchCtx};
+use super::watch_ctx::{AttachDeps, PodWatchCtx, should_track_cursors};
 use crate::discovery::context::build_client;
 use crate::discovery::pod_list::{PodWatchPlan, PodWatchPlanConfig};
 use crate::pipeline::ExitWatchState;
@@ -157,7 +157,8 @@ pub async fn run_with_client(
     let stats_rep_h = core.stats_rep_h;
     let flush_h = core.flush_h;
 
-    let (cursor, cursor_h) = CursorService::spawn(cfg.cursor_reconnect, cfg.root_token.clone());
+    let track_cursors = should_track_cursors(cfg.cursor_reconnect, cfg.pod_log.follow);
+    let (cursor, cursor_h) = CursorService::spawn(track_cursors, cfg.root_token.clone());
 
     let watch_ctx = Arc::new(PodWatchCtx {
         admission,
@@ -245,7 +246,9 @@ pub async fn run_with_client(
             }
         }
     }
-    shutdown_join_bounded(cursor_h, "cursor").await;
+    if let Some(cursor_h) = cursor_h {
+        shutdown_join_bounded(cursor_h, "cursor").await;
+    }
     shutdown_join_bounded(metrics_rep_h, "metrics_reporter").await;
     if let Some(h) = stats_rep_h {
         shutdown_join_bounded(h, "stats_reporter").await;

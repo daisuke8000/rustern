@@ -11,7 +11,7 @@ use super::cursor_service::CursorService;
 use super::mux::MuxCmd;
 use super::pod_meta_cache::PodMetaCache;
 use super::watch_admission::WatchAdmissionPolicy;
-use super::watch_ctx::{AttachDeps, PodWatchCtx};
+use super::watch_ctx::{AttachDeps, PodWatchCtx, should_track_cursors};
 use crate::discovery::{ContainerDiscoverOpts, ContainerLifecycleBucket, ContainerStatePolicy};
 use crate::source::ContextName;
 use crate::source::log_opener::{LogSourceOpener, ScriptLogSourceOpener};
@@ -118,8 +118,8 @@ impl TestOrchestratorBuilder {
             .log_opener
             .unwrap_or_else(|| ScriptLogSourceOpener::new(vec![]));
         let root_token = CancellationToken::new();
-        let (cursor, cursor_processor) =
-            CursorService::spawn(self.cursor_reconnect, root_token.clone());
+        let track_cursors = should_track_cursors(self.cursor_reconnect, self.pod_log.follow);
+        let (cursor, cursor_processor) = CursorService::spawn(track_cursors, root_token.clone());
         let ctx = PodWatchCtx {
             admission: WatchAdmissionPolicy::try_new(
                 self.context_name,
@@ -155,7 +155,7 @@ impl TestOrchestratorBuilder {
             _keepalive: TestKeepalive {
                 _root_token: root_token,
                 _mux_drain: mux_drain,
-                _cursor_processor: Some(cursor_processor),
+                _cursor_processor: cursor_processor,
             },
         }
     }
