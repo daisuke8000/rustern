@@ -59,6 +59,9 @@ impl PodMetaCache {
         let snapshot = pod_meta_snapshot_from_pod(pod);
         let shard = shard_index(&locator);
         let mut cache = self.inner[shard].write().await;
+        if cache.get(&locator).is_some_and(|prev| prev == &snapshot) {
+            return;
+        }
         cache.insert(locator, snapshot);
     }
 
@@ -265,6 +268,24 @@ mod tests {
             uid: "uid-1".into(),
         };
         assert_eq!(cache.lookup(&key).await, PodMetaSnapshot::default());
+    }
+
+    #[tokio::test]
+    async fn update_from_pod_is_idempotent_for_unchanged_snapshot() {
+        let cache = PodMetaCache::new();
+        let pod = test_pod();
+        cache.update_from_pod(&context(), &pod).await;
+        cache.update_from_pod(&context(), &pod).await;
+
+        let key = SourceKey {
+            context: context(),
+            namespace: "ns".into(),
+            pod: "pod-a".into(),
+            container: "app".into(),
+            uid: "uid-1".into(),
+        };
+        let snap = cache.lookup(&key).await;
+        assert_eq!(snap.node.as_deref(), Some("worker-3"));
     }
 
     #[tokio::test]
