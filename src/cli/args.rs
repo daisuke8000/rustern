@@ -157,7 +157,10 @@ pub struct Cli {
     #[arg(short = 'H', long = "highlight", value_name = "REGEX", action = clap::ArgAction::Append)]
     pub highlight: Vec<String>,
 
-    /// Hide stern-style +/- stream banners on stderr (rustern has no equivalents today).
+    /// Stern parity flag: accepted but intentionally a no-op today.
+    ///
+    /// Stern suppresses +/- attach banners on stderr with this flag. rustern does not
+    /// emit stream lifecycle banners, so the flag has no user-visible effect (debug log only).
     #[arg(long = "only-log-lines", action = clap::ArgAction::SetTrue)]
     pub only_log_lines: bool,
 
