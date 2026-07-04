@@ -25,9 +25,7 @@ use rustern_core::discovery::{
 use rustern_core::pipeline::{FilterOn, QueryMode};
 use rustern_core::source::ContextName;
 use rustern_core::source::pod_log::PodLogRequest;
-use rustern_core::{
-    CoreRunConfig, FormatterChoice, RuntimeFwdConfig,
-};
+use rustern_core::{CoreRunConfig, FormatterChoice, RuntimeFwdConfig};
 use tokio_util::sync::CancellationToken;
 
 pub fn test_context_name() -> ContextName {
