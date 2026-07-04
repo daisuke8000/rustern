@@ -432,6 +432,7 @@ async fn run_multistream_matrix(
         forward_metrics.clone(),
         token.clone(),
     ));
+    let drain_h = tokio::spawn(drain_render_consumer(render_rx, consumer, total_lines));
 
     for s in 0..streams {
         let events: Vec<_> = (0..LINES_PER_STREAM)
@@ -446,11 +447,10 @@ async fn run_multistream_matrix(
             .expect("mux add");
     }
 
-    let drain_h = tokio::spawn(drain_render_consumer(render_rx, consumer, total_lines));
     drop(mux_tx);
     mux_h.await.expect("mux task");
-    token.cancel();
     fwd_h.await.expect("forward task");
+    token.cancel();
     let delivered = drain_h.await.expect("render drain");
 
     MatrixRun {
@@ -540,6 +540,18 @@ async fn run_render_task_duplex(lines: usize) -> usize {
     let (render_tx, render_rx) = mpsc::channel(RENDER_BUFFER);
     let token = CancellationToken::new();
     let render_h = tokio::spawn(render_task(render_rx, wr, formatter));
+    let read_h = tokio::spawn(async move {
+        let mut buf = vec![0u8; 256];
+        let mut read_total = 0usize;
+        loop {
+            match rd.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => read_total += n,
+                Err(_) => break,
+            }
+        }
+        read_total
+    });
     let _flush_h = tokio::spawn(flush_ticker(
         render_tx.clone(),
         token.clone(),
@@ -558,17 +570,7 @@ async fn run_render_task_duplex(lines: usize) -> usize {
         .expect("render shutdown");
     render_h.await.expect("render task").expect("render io");
     token.cancel();
-
-    let mut buf = vec![0u8; 256];
-    let mut read_total = 0usize;
-    loop {
-        match rd.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => read_total += n,
-            Err(_) => break,
-        }
-    }
-    read_total
+    read_h.await.expect("duplex drain")
 }
 
 async fn run_mux_render_task_e2e(lines: usize, sink: bool) -> usize {
@@ -620,8 +622,8 @@ async fn run_mux_render_task_e2e(lines: usize, sink: bool) -> usize {
 
     drop(mux_tx);
     mux_h.await.expect("mux task");
-    token.cancel();
     fwd_h.await.expect("forward task");
+    token.cancel();
     render_tx
         .send(RenderCommand::Shutdown)
         .await
