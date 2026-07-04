@@ -98,7 +98,7 @@ cargo test -p rustern-core
 
 | Job | Checks |
 |-----|--------|
-| `rust` | `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`, `cargo build --workspace --locked`, `cargo test --workspace --locked` |
+| `rust` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build --workspace --locked`, `cargo test --workspace --locked` |
 | `audit` | `cargo audit` (RustSec advisory-db) |
 
 Internal design (runtime layers, mux/attach/watch, pipeline order, integration tests, criterion benches) lives in [`crates/rustern-core/README.md`](crates/rustern-core/README.md)—not duplicated here.

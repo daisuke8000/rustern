@@ -101,7 +101,7 @@ impl LogSourceOpener for ScriptLogSourceOpener {
             }
         };
         Box::pin(async move {
-            let inner: BoxedLogStream = Box::pin(futures::stream::iter(script.into_iter()));
+            let inner: BoxedLogStream = Box::pin(futures::stream::iter(script));
             Ok(Box::new(ScriptLogSource { meta, token, inner }) as Box<dyn LogSource>)
         })
     }

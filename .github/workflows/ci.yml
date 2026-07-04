@@ -51,7 +51,7 @@ jobs:
         run: cargo build --workspace --locked --verbose
 
       - name: Clippy
-        run: cargo clippy --workspace --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Wait for format
         wait: format

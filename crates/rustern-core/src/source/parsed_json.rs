@@ -1,5 +1,6 @@
 use jaq_json::Val;
 use serde_json::Value;
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum ParsedJson {
@@ -7,7 +8,8 @@ pub enum ParsedJson {
     Jaq(Val),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("failed to convert parsed JSON to jaq value")]
 pub(crate) struct JaqConvertError;
 
 impl ParsedJson {
