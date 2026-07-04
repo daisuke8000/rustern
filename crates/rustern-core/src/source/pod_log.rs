@@ -162,8 +162,7 @@ async fn log_stream_with_retry(
             }
             Err(e) if attempt + 1 >= max_attempts => {
                 return Err(LogSourceError::Api(format!(
-                    "after {} attempts: {}",
-                    max_attempts, e
+                    "after {max_attempts} attempts: {e}"
                 )));
             }
             Err(e) => {
