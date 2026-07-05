@@ -309,18 +309,19 @@ impl PipelineSpecBuilder {
     }
 
     pub fn build(self, exit_watch: ExitWatchState) -> PipelineSpec {
+        let needs_json_annotation = needs_json_annotation(&self.jq, &self.level_key);
         PipelineSpec {
             stages: PipelineStages {
                 includes: self.includes,
                 excludes: self.excludes,
                 filter_on: self.filter_on,
-                jq: self.jq.clone(),
-                level_key: self.level_key.clone(),
+                jq: self.jq,
+                level_key: self.level_key,
                 color_assign: self.color_assign,
                 exit_on: self.exit_on,
                 exit_on_level: self.exit_on_level,
                 exit_watch,
-                needs_json_annotation: needs_json_annotation(&self.jq, &self.level_key),
+                needs_json_annotation,
             },
         }
     }
