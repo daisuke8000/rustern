@@ -32,6 +32,9 @@ pub fn level_classify<S>(
 where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
 {
+    let serde_level_pointer = level_key
+        .as_ref()
+        .map(|key| crate::source::parsed_json::json_pointer_from_dot_path(key));
     inner.map(move |r| {
         r.map(|mut ev| {
             let Some(ref key) = level_key else {
@@ -40,7 +43,9 @@ where
             let Some(ref parsed) = ev.structured else {
                 return ev;
             };
-            if let Some(lv) = parsed.level_str_at_dot_path(key) {
+            if let Some(lv) =
+                parsed.level_str_at_dot_path_with_serde_pointer(key, serde_level_pointer.as_deref())
+            {
                 ev.level = Some(classify_str(lv));
             }
             ev
