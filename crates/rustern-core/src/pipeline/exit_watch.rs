@@ -47,14 +47,24 @@ fn event_level_rank(level: &LogLevel) -> u8 {
         LogLevel::Info => 2,
         LogLevel::Warn => 3,
         LogLevel::Error => 4,
-        LogLevel::Other(s) => match s.to_ascii_lowercase().as_str() {
-            "error" | "err" | "fatal" => 4,
-            "warn" | "warning" => 3,
-            "info" => 2,
-            "debug" => 1,
-            "trace" => 0,
-            _ => 2,
-        },
+        LogLevel::Other(s) => {
+            if s.eq_ignore_ascii_case("error")
+                || s.eq_ignore_ascii_case("err")
+                || s.eq_ignore_ascii_case("fatal")
+            {
+                4
+            } else if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") {
+                3
+            } else if s.eq_ignore_ascii_case("info") {
+                2
+            } else if s.eq_ignore_ascii_case("debug") {
+                1
+            } else if s.eq_ignore_ascii_case("trace") {
+                0
+            } else {
+                2
+            }
+        }
     }
 }
 
