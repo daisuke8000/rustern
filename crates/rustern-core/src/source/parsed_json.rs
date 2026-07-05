@@ -14,10 +14,22 @@ pub(crate) struct JaqConvertError;
 
 impl ParsedJson {
     pub fn level_str_at_dot_path(&self, dot_path: &str) -> Option<&str> {
+        self.level_str_at_dot_path_with_serde_pointer(dot_path, None)
+    }
+
+    pub(crate) fn level_str_at_dot_path_with_serde_pointer(
+        &self,
+        dot_path: &str,
+        serde_pointer: Option<&str>,
+    ) -> Option<&str> {
         match self {
             Self::Serde(v) => {
-                let ptr = dot_pointer(dot_path);
-                v.pointer(&ptr).and_then(|x| x.as_str())
+                if let Some(ptr) = serde_pointer {
+                    v.pointer(ptr).and_then(|x| x.as_str())
+                } else {
+                    let ptr = json_pointer_from_dot_path(dot_path);
+                    v.pointer(&ptr).and_then(|x| x.as_str())
+                }
             }
             Self::Jaq(v) => val_dot_path(v, dot_path).and_then(val_as_str),
         }
@@ -38,7 +50,7 @@ impl ParsedJson {
     }
 }
 
-fn dot_pointer(path: &str) -> String {
+pub(crate) fn json_pointer_from_dot_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
