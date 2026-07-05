@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use owo_colors::OwoColorize;
@@ -21,26 +22,27 @@ impl SternHighlightLineFormatter {
 impl LineFormatter for SternHighlightLineFormatter {
     fn format_into(&self, event: &LogEvent, buf: &mut String) {
         self.inner.format_into(event, buf);
-        if self.re.find(buf).is_none() {
-            return;
+        if let Some(highlighted) = highlight_default_line(buf, &self.re) {
+            *buf = highlighted;
         }
-        let highlighted = highlight_default_line(buf, &self.re);
-        buf.clear();
-        buf.push_str(&highlighted);
     }
 }
 
-fn highlight_default_line(text: &str, re: &Regex) -> String {
+fn highlight_default_line(text: &str, re: &Regex) -> Option<String> {
     let mut last = 0usize;
-    let mut out = String::with_capacity(text.len().saturating_add(text.len().min(4096)));
+    let mut out = None::<String>;
     for m in re.find_iter(text) {
+        let out = out.get_or_insert_with(|| {
+            String::with_capacity(text.len().saturating_add(text.len().min(4096)))
+        });
         out.push_str(&text[last..m.start()]);
-        let styled = (&text[m.start()..m.end()]).red().bold().to_string();
-        out.push_str(&styled);
+        let _ = write!(out, "{}", (&text[m.start()..m.end()]).red().bold());
         last = m.end();
     }
-    out.push_str(&text[last..]);
-    out
+    out.map(|mut highlighted| {
+        highlighted.push_str(&text[last..]);
+        highlighted
+    })
 }
 
 /// Stern merges `--include` and `--highlight`, sorts alternation segments by descending pattern-string
@@ -82,7 +84,7 @@ mod tests {
             .expect("combined pattern");
         assert!(re.is_match("foobar"));
 
-        let out = highlight_default_line("- foobar!", &re);
+        let out = highlight_default_line("- foobar!", &re).expect("match");
         assert!(out.contains("foobar"));
         assert!(out.starts_with('-'));
         assert!(out.contains('\x1b')); // ansi wrap
@@ -90,5 +92,13 @@ mod tests {
             !out.ends_with('-'),
             "prefix before match should survive: {out:?}"
         );
+    }
+
+    #[test]
+    fn no_match_returns_none() {
+        let re = compile_stern_highlight_regex(&["needle".into()], &[])
+            .unwrap()
+            .expect("pattern");
+        assert!(highlight_default_line("no haystack here", &re).is_none());
     }
 }
