@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
@@ -30,13 +31,13 @@ pub(crate) struct CursorUpdate {
 }
 
 #[derive(Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) struct CursorStoreStats {
     cursor_updates: AtomicU64,
     cursor_gets: AtomicU64,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 impl CursorStoreStats {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -66,6 +67,7 @@ type CursorShardMap = Arc<Vec<RwLock<HashMap<SourceKey, DateTime<Utc>>>>>;
 #[derive(Clone)]
 pub(crate) struct ReconnectCursorStore {
     inner: CursorShardMap,
+    #[cfg(test)]
     stats: Option<Arc<CursorStoreStats>>,
 }
 
@@ -83,11 +85,12 @@ impl ReconnectCursorStore {
                     .map(|_| RwLock::new(HashMap::new()))
                     .collect(),
             ),
+            #[cfg(test)]
             stats: None,
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn new_with_stats(stats: Arc<CursorStoreStats>) -> Self {
         Self {
             inner: Arc::new(
@@ -100,6 +103,7 @@ impl ReconnectCursorStore {
     }
 
     pub(crate) async fn get(&self, key: &SourceKey) -> Option<DateTime<Utc>> {
+        #[cfg(test)]
         if let Some(stats) = &self.stats {
             stats.cursor_gets.fetch_add(1, Ordering::Relaxed);
         }
@@ -108,6 +112,7 @@ impl ReconnectCursorStore {
     }
 
     pub(crate) async fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
+        #[cfg(test)]
         if let Some(stats) = &self.stats {
             stats.cursor_updates.fetch_add(1, Ordering::Relaxed);
         }
