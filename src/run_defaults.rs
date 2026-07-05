@@ -1,8 +1,8 @@
 //! Thin CLI → core mapper for pod query and namespace resolution.
 
 use rustern_core::discovery::run_resolution::{
-    RunResolutionError, RunResolutionInput, RunResolutionOutput, resolve_run_input,
-    resolve_run_namespaces, resolve_run_query,
+    RunResolutionInput, RunResolutionOutput, resolve_run_input, resolve_run_namespaces,
+    resolve_run_query,
 };
 
 use crate::cli::Cli;
@@ -18,25 +18,21 @@ fn run_resolution_input(cli: &Cli) -> RunResolutionInput<'_> {
     }
 }
 
-fn map_run_resolution_error(err: RunResolutionError) -> String {
-    err.to_string()
-}
-
 /// Resolve pod query, namespaces, and validation in one call.
 pub fn resolved_run(cli: &Cli) -> Result<RunResolutionOutput, String> {
     resolve_run_input(&run_resolution_input(cli), &cli.context_selector())
-        .map_err(map_run_resolution_error)
+        .map_err(|e| e.to_string())
 }
 
 /// Resolve the pod query positional, applying stern-like defaults.
 pub fn resolved_pod_query(cli: &Cli) -> Result<String, String> {
-    resolve_run_query(&run_resolution_input(cli)).map_err(map_run_resolution_error)
+    resolve_run_query(&run_resolution_input(cli)).map_err(|e| e.to_string())
 }
 
 /// Resolve namespace scope: `-A` → empty; explicit `-n` → deduped list; else active context namespace.
 pub fn resolved_namespaces(cli: &Cli) -> Result<Vec<String>, String> {
     resolve_run_namespaces(&run_resolution_input(cli), &cli.context_selector())
-        .map_err(map_run_resolution_error)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
