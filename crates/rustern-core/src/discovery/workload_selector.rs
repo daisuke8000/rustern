@@ -18,10 +18,7 @@ use super::resource::{ResourceKind, label_selector_for};
 ///
 /// Uses lexicographic key order (`BTreeMap` iterator order).
 pub fn btree_to_label_selector(m: &BTreeMap<String, String>) -> String {
-    let mut pairs: Vec<(&String, &String)> = m.iter().collect();
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
-    pairs
-        .iter()
+    m.iter()
         .map(|(k, v)| format!("{}={}", k.as_str(), v.as_str()))
         .collect::<Vec<_>>()
         .join(",")
