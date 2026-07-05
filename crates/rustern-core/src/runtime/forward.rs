@@ -365,33 +365,34 @@ mod tests {
 
     use crate::source::{ContextName, Labels, LogEvent, SourceKind, SourceMeta};
 
+    fn sample_ev() -> LogEvent {
+        LogEvent {
+            source: Arc::new(SourceMeta {
+                context: ContextName("c".into()),
+                namespace: "n".into(),
+                pod: "p".into(),
+                container: "x".into(),
+                kind: SourceKind::PodLog,
+                node: None,
+                labels: Arc::new(Labels::default()),
+                uid: "u".into(),
+                palette_index: None,
+                container_palette_index: None,
+            }),
+            timestamp: chrono::Utc::now(),
+            message: std::sync::Arc::from("x"),
+            structured: None,
+            level: None,
+            palette_index: None,
+            container_palette_index: None,
+        }
+    }
+
     #[tokio::test]
     async fn forwards_all_events_when_buffer_sufficient() {
         let metrics = LossyMetrics::new(None);
         let (tx, mut rx) = mpsc::channel::<RenderCommand>(1024);
         let token = CancellationToken::new();
-        fn sample_ev() -> LogEvent {
-            LogEvent {
-                source: Arc::new(SourceMeta {
-                    context: ContextName("c".into()),
-                    namespace: "n".into(),
-                    pod: "p".into(),
-                    container: "x".into(),
-                    kind: SourceKind::PodLog,
-                    node: None,
-                    labels: Arc::new(Labels::default()),
-                    uid: "u".into(),
-                    palette_index: None,
-                    container_palette_index: None,
-                }),
-                timestamp: chrono::Utc::now(),
-                message: std::sync::Arc::from("x"),
-                structured: None,
-                level: None,
-                palette_index: None,
-                container_palette_index: None,
-            }
-        }
         let v: Vec<_> = (0..50).map(|_| Ok(sample_ev())).collect();
         let s = stream::iter(v);
         let h = tokio::spawn(forward_to_render(
@@ -425,28 +426,6 @@ mod tests {
         let metrics = LossyMetrics::new(None);
         let (tx, rx) = mpsc::channel::<RenderCommand>(1);
         let token = CancellationToken::new();
-        fn sample_ev() -> LogEvent {
-            LogEvent {
-                source: Arc::new(SourceMeta {
-                    context: ContextName("c".into()),
-                    namespace: "n".into(),
-                    pod: "p".into(),
-                    container: "x".into(),
-                    kind: SourceKind::PodLog,
-                    node: None,
-                    labels: Arc::new(Labels::default()),
-                    uid: "u".into(),
-                    palette_index: None,
-                    container_palette_index: None,
-                }),
-                timestamp: chrono::Utc::now(),
-                message: std::sync::Arc::from("x"),
-                structured: None,
-                level: None,
-                palette_index: None,
-                container_palette_index: None,
-            }
-        }
         let v: Vec<_> = (0..32).map(|_| Ok(sample_ev())).collect();
         let s = stream::iter(v);
         let h = tokio::spawn(forward_to_render(
@@ -475,29 +454,6 @@ mod tests {
         let metrics = LossyMetrics::new(Some(stats.clone()));
         let (tx, _rx) = mpsc::channel::<RenderCommand>(1);
         let token = CancellationToken::new();
-
-        fn sample_ev() -> LogEvent {
-            LogEvent {
-                source: Arc::new(SourceMeta {
-                    context: ContextName("c".into()),
-                    namespace: "n".into(),
-                    pod: "p".into(),
-                    container: "x".into(),
-                    kind: SourceKind::PodLog,
-                    node: None,
-                    labels: Arc::new(Labels::default()),
-                    uid: "u".into(),
-                    palette_index: None,
-                    container_palette_index: None,
-                }),
-                timestamp: chrono::Utc::now(),
-                message: std::sync::Arc::from("x"),
-                structured: None,
-                level: None,
-                palette_index: None,
-                container_palette_index: None,
-            }
-        }
 
         let s = stream::iter(vec![Ok(sample_ev()), Ok(sample_ev())]);
         let h = tokio::spawn(forward_to_render(
@@ -531,29 +487,6 @@ mod tests {
         let metrics = LossyMetrics::new(Some(stats.clone()));
         let (tx, mut rx) = mpsc::channel::<RenderCommand>(8);
         let token = CancellationToken::new();
-
-        fn sample_ev() -> LogEvent {
-            LogEvent {
-                source: Arc::new(SourceMeta {
-                    context: ContextName("c".into()),
-                    namespace: "n".into(),
-                    pod: "p".into(),
-                    container: "x".into(),
-                    kind: SourceKind::PodLog,
-                    node: None,
-                    labels: Arc::new(Labels::default()),
-                    uid: "u".into(),
-                    palette_index: None,
-                    container_palette_index: None,
-                }),
-                timestamp: chrono::Utc::now(),
-                message: std::sync::Arc::from("x"),
-                structured: None,
-                level: None,
-                palette_index: None,
-                container_palette_index: None,
-            }
-        }
 
         let s = stream::iter(vec![
             Ok(sample_ev()),
