@@ -1,10 +1,11 @@
-use std::sync::Arc;
-
-use futures::stream::{Stream, StreamExt};
 use jaq_core::data::JustLut;
 use jaq_core::load::{Arena, File, Loader};
 use jaq_core::{Compiler, Ctx, Filter, Vars};
 use jaq_json::Val;
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use futures::stream::{Stream, StreamExt};
 
 use crate::source::{LogEvent, LogSourceError};
 
@@ -21,6 +22,17 @@ pub enum QueryMode {
     Replace,
     Append,
     Filter,
+}
+
+fn format_outputs_joined(outputs: &[Val]) -> String {
+    let mut rendered = String::new();
+    for (i, v) in outputs.iter().enumerate() {
+        if i > 0 {
+            rendered.push('\n');
+        }
+        let _ = write!(rendered, "{v}");
+    }
+    rendered
 }
 
 #[derive(Clone)]
@@ -105,21 +117,13 @@ where
                         }
                         QueryMode::Replace => {
                             ev.structured = None;
-                            let rendered = outputs
-                                .iter()
-                                .map(|v| format!("{v}"))
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                            let rendered = format_outputs_joined(&outputs);
                             ev.message = Arc::from(rendered.as_str());
                             Some(Ok(ev))
                         }
                         QueryMode::Append => {
                             ev.structured = None;
-                            let rendered = outputs
-                                .iter()
-                                .map(|v| format!("{v}"))
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                            let rendered = format_outputs_joined(&outputs);
                             ev.message =
                                 Arc::from(format!("{} | {}", ev.message, rendered).as_str());
                             Some(Ok(ev))
