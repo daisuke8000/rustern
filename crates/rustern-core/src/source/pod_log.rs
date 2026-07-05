@@ -190,12 +190,13 @@ fn trim_line_end(mut raw: &[u8]) -> &[u8] {
 /// advance +1µs from the previous line on the same stream so ordering and
 /// `--cursor-reconnect` cursors stay stable instead of jumping to wall clock.
 #[derive(Debug, Default)]
-struct LogLineTimestampResolver {
+#[doc(hidden)]
+pub struct LogLineTimestampResolver {
     last: Option<DateTime<Utc>>,
 }
 
 impl LogLineTimestampResolver {
-    fn resolve(
+    pub fn resolve(
         &mut self,
         parsed: Option<DateTime<Utc>>,
         msg: Arc<str>,
@@ -213,7 +214,8 @@ impl LogLineTimestampResolver {
     }
 }
 
-fn split_log_line(raw: &[u8]) -> (Option<DateTime<Utc>>, Arc<str>) {
+#[doc(hidden)]
+pub fn split_log_line(raw: &[u8]) -> (Option<DateTime<Utc>>, Arc<str>) {
     let raw = trim_line_end(raw);
     if let Some(sp) = raw.iter().position(|&b| b == b' ')
         && let Ok(ts_s) = std::str::from_utf8(&raw[..sp])
@@ -231,22 +233,6 @@ fn split_log_line(raw: &[u8]) -> (Option<DateTime<Utc>>, Arc<str>) {
         Err(_) => Arc::from(String::from_utf8_lossy(raw).into_owned()),
     };
     (None, msg)
-}
-
-/// Parse a kube log line with an optional RFC3339 prefix into `(timestamp, message)`.
-///
-/// Standalone calls without stream context assign [`DateTime::UNIX_EPOCH`] to undated lines.
-pub fn parse_log_line(raw: &str) -> (DateTime<Utc>, Arc<str>) {
-    let mut resolver = LogLineTimestampResolver::default();
-    let (parsed, msg) = split_log_line(raw.as_bytes());
-    resolver.resolve(parsed, msg)
-}
-
-/// Parse a newline-terminated kube log line from a reusable read buffer.
-pub fn parse_log_line_bytes(raw: &[u8]) -> (DateTime<Utc>, Arc<str>) {
-    let mut resolver = LogLineTimestampResolver::default();
-    let (parsed, msg) = split_log_line(raw);
-    resolver.resolve(parsed, msg)
 }
 
 impl LogSource for PodLogSource {
@@ -321,8 +307,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_log_line_strips_rfc3339_prefix() {
-        let (ts, msg) = parse_log_line("2024-03-15T10:30:45Z hello world");
+    fn split_log_line_strips_rfc3339_prefix() {
+        let (parsed, msg) = split_log_line(b"2024-03-15T10:30:45Z hello world");
+        let ts = parsed.expect("timestamp");
         assert_eq!(
             ts,
             DateTime::parse_from_rfc3339("2024-03-15T10:30:45Z")
@@ -333,10 +320,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_log_line_fallback_without_timestamp() {
-        let (ts, msg) = parse_log_line("plain line without prefix");
+    fn split_log_line_without_timestamp_prefix() {
+        let (parsed, msg) = split_log_line(b"plain line without prefix");
+        assert!(parsed.is_none());
         assert_eq!(&*msg, "plain line without prefix");
-        assert_eq!(ts, DateTime::UNIX_EPOCH);
     }
 
     #[test]
@@ -355,11 +342,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_log_line_bytes_matches_str_parser() {
+    fn split_log_line_trims_trailing_newline() {
         let line = b"2024-03-15T10:30:45Z hello world\n";
-        let (ts_str, msg_str) = parse_log_line("2024-03-15T10:30:45Z hello world");
-        let (ts_bytes, msg_bytes) = parse_log_line_bytes(line);
-        assert_eq!(ts_str, ts_bytes);
-        assert_eq!(msg_str, msg_bytes);
+        let (parsed, msg) = split_log_line(line);
+        let ts = parsed.expect("timestamp");
+        assert_eq!(
+            ts,
+            DateTime::parse_from_rfc3339("2024-03-15T10:30:45Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        assert_eq!(&*msg, "hello world");
     }
 }

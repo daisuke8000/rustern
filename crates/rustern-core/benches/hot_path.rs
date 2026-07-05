@@ -7,7 +7,6 @@ use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, 
 use futures::stream::{self, Stream, StreamExt};
 use regex::Regex;
 use rustern_core::format_display::{TimestampStyle, TimestampZone};
-use rustern_core::parse_log_line;
 use rustern_core::pipeline::{
     ColorAssignOpts, ExitWatchState, QueryMode, include_exclude, jq_evaluate, json_annotate,
     level_classify, validate_filter,
@@ -21,6 +20,7 @@ use rustern_core::runtime::PipelineSpecBuilder;
 use rustern_core::source::{
     ContextName, Labels, LogEvent, LogSourceError, SourceKey, SourceKind, SourceMeta,
 };
+use rustern_core::{LogLineTimestampResolver, split_log_line};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -359,15 +359,16 @@ fn bench_parse_log_line(c: &mut Criterion) {
     ] {
         let line = kube_log_line(&msg);
         group.bench_with_input(BenchmarkId::new("parse", name), &line, |b, line| {
-            b.iter(|| black_box(parse_log_line(black_box(line.as_str()))));
+            b.iter(|| {
+                let (parsed, msg) = split_log_line(black_box(line.as_bytes()));
+                black_box((parsed, msg));
+            });
         });
     }
     group.finish();
 }
 
 fn bench_ingest_log_line(c: &mut Criterion) {
-    use rustern_core::parse_log_line_bytes;
-
     let mut group = c.benchmark_group("ingest_log_line");
 
     for (name, msg) in [
@@ -377,8 +378,10 @@ fn bench_ingest_log_line(c: &mut Criterion) {
         let mut buf = kube_log_line(&msg).into_bytes();
         buf.push(b'\n');
         group.bench_with_input(BenchmarkId::new("buffer_to_event", name), &buf, |b, buf| {
+            let mut resolver = LogLineTimestampResolver::default();
             b.iter(|| {
-                let (ts, message) = parse_log_line_bytes(black_box(buf.as_slice()));
+                let (parsed, msg) = split_log_line(black_box(buf.as_slice()));
+                let (ts, message) = resolver.resolve(parsed, msg);
                 black_box((ts, message));
             });
         });
