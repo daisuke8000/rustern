@@ -110,6 +110,10 @@ impl RunStats {
         self.mux_dropped_lines.fetch_add(1);
     }
 
+    pub fn mux_dropped_line_count(&self) -> u64 {
+        self.mux_dropped_lines.load()
+    }
+
     pub fn snapshot_and_reset(&self) -> RunStatsSnapshot {
         RunStatsSnapshot {
             active_streams: self.active_streams.load(),
@@ -195,13 +199,18 @@ impl MuxMetrics {
     }
 
     pub fn mux_drop_count(&self) -> u64 {
-        self.mux_dropped.load(Ordering::Relaxed)
+        if let Some(stats) = &self.stats {
+            stats.mux_dropped_line_count()
+        } else {
+            self.mux_dropped.load(Ordering::Relaxed)
+        }
     }
 
     pub fn record_mux_drop(&self) {
-        self.mux_dropped.fetch_add(1, Ordering::Relaxed);
         if let Some(stats) = &self.stats {
             stats.record_mux_dropped_line();
+        } else {
+            self.mux_dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
