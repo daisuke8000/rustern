@@ -9,8 +9,7 @@ pub(crate) fn install_hook() {
 }
 
 pub(crate) fn fail(report: miette::Report) -> ! {
-    eprintln!("{report}");
-    process::exit(1);
+    fail_with_code(report, 1);
 }
 
 pub(crate) fn fail_msg(msg: impl Into<String>) -> ! {
