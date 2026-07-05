@@ -103,17 +103,13 @@ where
     P: Into<Arc<[Regex]>>,
 {
     let patterns: Arc<[Regex]> = patterns.into();
-    inner.then(move |r| {
-        let state = state.clone();
-        let patterns = Arc::clone(&patterns);
-        async move {
-            if let Ok(ref ev) = r
-                && patterns.iter().any(|re| re.is_match(ev.message.as_ref()))
-            {
-                state.fire();
-            }
-            r
+    inner.map(move |r| {
+        if let Ok(ref ev) = r
+            && patterns.iter().any(|re| re.is_match(ev.message.as_ref()))
+        {
+            state.fire();
         }
+        r
     })
 }
 
@@ -126,17 +122,14 @@ where
     S: Stream<Item = Result<LogEvent, LogSourceError>> + Send + 'static,
 {
     let threshold = min_level.rank();
-    inner.then(move |r| {
-        let state = state.clone();
-        async move {
-            if let Ok(ref ev) = r
-                && let Some(ref lv) = ev.level
-                && event_level_rank(lv) >= threshold
-            {
-                state.fire();
-            }
-            r
+    inner.map(move |r| {
+        if let Ok(ref ev) = r
+            && let Some(ref lv) = ev.level
+            && event_level_rank(lv) >= threshold
+        {
+            state.fire();
         }
+        r
     })
 }
 
