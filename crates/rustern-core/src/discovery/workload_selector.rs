@@ -102,15 +102,6 @@ fn label_selector_from_meta(
     parts.join(",")
 }
 
-fn string_from_ls(
-    ls: &LabelSelector,
-    template: Option<&PodTemplateSpec>,
-    kind: ResourceKind,
-    workload_name: &str,
-) -> String {
-    label_selector_from_meta(ls, template, kind, workload_name)
-}
-
 async fn deployment_selector(
     client: &Client,
     ns: &str,
@@ -121,7 +112,7 @@ async fn deployment_selector(
     let Some(spec) = d.spec.as_ref() else {
         return Ok(label_selector_for(ResourceKind::Deployment, workload_name));
     };
-    Ok(string_from_ls(
+    Ok(label_selector_from_meta(
         &spec.selector,
         Some(&spec.template),
         ResourceKind::Deployment,
@@ -139,7 +130,7 @@ async fn statefulset_selector(
     let Some(spec) = s.spec.as_ref() else {
         return Ok(label_selector_for(ResourceKind::StatefulSet, workload_name));
     };
-    Ok(string_from_ls(
+    Ok(label_selector_from_meta(
         &spec.selector,
         Some(&spec.template),
         ResourceKind::StatefulSet,
@@ -157,7 +148,7 @@ async fn daemonset_selector(
     let Some(spec) = d.spec.as_ref() else {
         return Ok(label_selector_for(ResourceKind::DaemonSet, workload_name));
     };
-    Ok(string_from_ls(
+    Ok(label_selector_from_meta(
         &spec.selector,
         Some(&spec.template),
         ResourceKind::DaemonSet,
@@ -175,7 +166,7 @@ async fn replicaset_selector(
     let Some(spec) = rs.spec.as_ref() else {
         return Ok(label_selector_for(ResourceKind::ReplicaSet, workload_name));
     };
-    Ok(string_from_ls(
+    Ok(label_selector_from_meta(
         &spec.selector,
         spec.template.as_ref(),
         ResourceKind::ReplicaSet,
@@ -195,7 +186,7 @@ async fn job_selector(
     };
 
     match &spec.selector {
-        Some(ls) => Ok(string_from_ls(
+        Some(ls) => Ok(label_selector_from_meta(
             ls,
             Some(&spec.template),
             ResourceKind::Job,
