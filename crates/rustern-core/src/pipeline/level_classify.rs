@@ -35,6 +35,9 @@ where
     let serde_level_pointer = level_key
         .as_ref()
         .map(|key| crate::source::parsed_json::json_pointer_from_dot_path(key));
+    let jaq_level_keys = level_key
+        .as_ref()
+        .map(|key| crate::source::parsed_json::jaq_dot_path_keys(key));
     inner.map(move |r| {
         r.map(|mut ev| {
             let Some(ref key) = level_key else {
@@ -43,9 +46,11 @@ where
             let Some(ref parsed) = ev.structured else {
                 return ev;
             };
-            if let Some(lv) =
-                parsed.level_str_at_dot_path_with_serde_pointer(key, serde_level_pointer.as_deref())
-            {
+            if let Some(lv) = parsed.level_str_at_dot_path_with_serde_pointer(
+                key,
+                serde_level_pointer.as_deref(),
+                jaq_level_keys.as_deref(),
+            ) {
                 ev.level = Some(classify_str(lv));
             }
             ev
@@ -91,7 +96,7 @@ mod tests {
 
     #[tokio::test]
     async fn extracts_level_from_jaq_val() {
-        let raw = r#"{"level":"warn","msg":"boom"}"#;
+        let raw = r#"{"meta":{"level":"warn"},"msg":"boom"}"#;
         let ev = LogEvent {
             source: Arc::new(SourceMeta {
                 context: ContextName("ctx".into()),
@@ -113,7 +118,7 @@ mod tests {
             container_palette_index: None,
         };
         let s = futures::stream::iter(vec![Ok(ev)]);
-        let out: Vec<_> = level_classify(s, Some("level".into())).collect().await;
+        let out: Vec<_> = level_classify(s, Some("meta.level".into())).collect().await;
         let lv = out[0].as_ref().unwrap().level.as_ref().unwrap();
         assert!(matches!(lv, LogLevel::Warn));
     }
