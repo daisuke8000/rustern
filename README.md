@@ -9,7 +9,7 @@ Kubernetes multi-pod and multi-container log tailer in Rust, inspired by [stern]
 
 ## Install
 
-Requires Rust **1.88+** (`rust-version` in `Cargo.toml`).
+Requires Rust **1.89+** (`rust-version` in `Cargo.toml`).
 
 ```bash
 make release        # → target/release/rstn
