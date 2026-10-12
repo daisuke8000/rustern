@@ -36,7 +36,10 @@ fn build_object(event: &LogEvent, all_namespaces: bool) -> Map<String, Value> {
         "message".into(),
         encode_message(&event.message, event.structured.as_ref()),
     );
-    obj.insert("timestamp".into(), json!(event.timestamp.to_rfc3339()));
+    obj.insert(
+        "timestamp".into(),
+        Value::String(event.timestamp.to_rfc3339()),
+    );
     if let Some(node) = &event.source.node {
         obj.insert("node".into(), json!(node));
     }
@@ -101,6 +104,74 @@ mod tests {
         ExtJsonLineFormatter {
             all_namespaces,
             pretty,
+        }
+    }
+
+    #[test]
+    fn renderers_preserve_rfc3339_timestamp_bytes() {
+        use crate::format_display::{TimestampStyle, TimestampZone};
+        use crate::render::default_renderer::DefaultLineFormatter;
+        use crate::render::json_renderer::JsonLineFormatter;
+        use chrono::{DateTime, Local, SecondsFormat};
+
+        for timestamp in [
+            "2024-06-15T12:00:00+00:00",
+            "2024-06-15T12:00:00.123+00:00",
+            "2024-06-15T12:00:00.123456+00:00",
+            "2024-06-15T12:00:00.123456789+00:00",
+            "2024-06-15T12:00:00.000000001+00:00",
+            "2016-12-31T23:59:60.123456789+00:00",
+            "1969-12-31T23:59:59.999999999+00:00",
+            "-0001-01-01T00:00:00+00:00",
+            "+10000-01-01T00:00:00+00:00",
+        ] {
+            let mut event = sample_event("x");
+            event.timestamp = timestamp.parse::<DateTime<Utc>>().unwrap();
+            assert_eq!(event.timestamp.to_rfc3339(), timestamp);
+
+            assert_eq!(
+                JsonLineFormatter.format_line(&event),
+                format!(
+                    "{{\"pod\":\"web-abc\",\"container\":\"app\",\"namespace\":\"production\",\"timestamp\":\"{timestamp}\",\"message\":\"x\",\"level\":\"info\"}}\n"
+                )
+            );
+            for pretty in [false, true] {
+                let output = formatter(true, pretty).format_line(&event);
+                let value: Value = serde_json::from_str(&output).unwrap();
+                assert_eq!(value["timestamp"], timestamp);
+            }
+
+            for zone in [
+                TimestampZone::Utc,
+                TimestampZone::Local,
+                TimestampZone::Iana(chrono_tz::America::New_York),
+                TimestampZone::Iana(chrono_tz::Asia::Kolkata),
+            ] {
+                let expected = match zone {
+                    TimestampZone::Utc => {
+                        event.timestamp.to_rfc3339_opts(SecondsFormat::Nanos, false)
+                    }
+                    TimestampZone::Local => event
+                        .timestamp
+                        .with_timezone(&Local)
+                        .to_rfc3339_opts(SecondsFormat::Nanos, false),
+                    TimestampZone::Iana(tz) => event
+                        .timestamp
+                        .with_timezone(&tz)
+                        .to_rfc3339_opts(SecondsFormat::Nanos, false),
+                };
+                let default = DefaultLineFormatter {
+                    timestamp_style: TimestampStyle::Rfc3339,
+                    timestamp_zone: zone,
+                    color_enabled: false,
+                    pod_colors: false,
+                    container_colors: false,
+                };
+                assert_eq!(
+                    default.format_line(&event),
+                    format!("{expected} web-abc/app | x\n")
+                );
+            }
         }
     }
 
