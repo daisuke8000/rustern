@@ -111,12 +111,12 @@ impl ReconnectCursorStore {
         self.inner[shard].read().await.get(key).copied()
     }
 
-    pub(crate) async fn record(&self, key: &SourceKey, timestamp: DateTime<Utc>) {
+    // Consume the queued key so recording does not clone its string buffers again.
+    pub(crate) async fn record(&self, key: SourceKey, timestamp: DateTime<Utc>) {
         #[cfg(test)]
         if let Some(stats) = &self.stats {
             stats.cursor_updates.fetch_add(1, Ordering::Relaxed);
         }
-        let key = key.clone();
         let shard = shard_index(&key);
         self.inner[shard].write().await.insert(key, timestamp);
     }
@@ -138,7 +138,7 @@ pub(crate) async fn run_cursor_update_processor(
             _ = token.cancelled() => break,
             update = rx.recv() => {
                 let Some(update) = update else { break };
-                store.record(&update.key, update.timestamp).await;
+                store.record(update.key, update.timestamp).await;
             }
         }
     }
@@ -297,7 +297,7 @@ mod tests {
         let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
 
         assert!(store.get(&key).await.is_none());
-        store.record(&key, ts).await;
+        store.record(key.clone(), ts).await;
         assert_eq!(store.get(&key).await, Some(ts));
         store.remove(&key).await;
         assert!(store.get(&key).await.is_none());
@@ -316,11 +316,11 @@ mod tests {
         let key_b_c = key_b.clone();
         let (got_a, got_b) = tokio::join!(
             async move {
-                store_a.record(&key_a_c, ts_a).await;
+                store_a.record(key_a_c.clone(), ts_a).await;
                 store_a.get(&key_a_c).await
             },
             async move {
-                store_b.record(&key_b_c, ts_b).await;
+                store_b.record(key_b_c.clone(), ts_b).await;
                 store_b.get(&key_b_c).await
             },
         );
@@ -342,10 +342,10 @@ mod tests {
         let key_b = key.clone();
         tokio::join!(
             async move {
-                store_a.record(&key_a, ts_early).await;
+                store_a.record(key_a, ts_early).await;
             },
             async move {
-                store_b.record(&key_b, ts_late).await;
+                store_b.record(key_b, ts_late).await;
             },
         );
 
@@ -398,7 +398,7 @@ mod tests {
             let store = store.clone();
             let ts = base_ts + chrono::Duration::milliseconds(i as i64);
             join_set.spawn(async move {
-                store.record(&key, ts).await;
+                store.record(key.clone(), ts).await;
                 (key, ts)
             });
         }
@@ -452,6 +452,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn processor_moves_key_buffers_into_store() {
+        let store = ReconnectCursorStore::new();
+        let key = sample_key("owned-pod", "owned-uid");
+        let lookup = key.clone();
+        let buffers = [
+            key.context.0.as_ptr() as usize,
+            key.namespace.as_ptr() as usize,
+            key.pod.as_ptr() as usize,
+            key.container.as_ptr() as usize,
+            key.uid.as_ptr() as usize,
+        ];
+        let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(CursorUpdate { key, timestamp: ts })
+            .expect("send update");
+        drop(tx);
+        run_cursor_update_processor(rx, store.clone(), CancellationToken::new()).await;
+
+        let shard = store.inner[shard_index(&lookup)].read().await;
+        let (stored, timestamp) = shard.get_key_value(&lookup).expect("stored cursor");
+        assert_eq!(*timestamp, ts);
+        assert_eq!(
+            [
+                stored.context.0.as_ptr() as usize,
+                stored.namespace.as_ptr() as usize,
+                stored.pod.as_ptr() as usize,
+                stored.container.as_ptr() as usize,
+                stored.uid.as_ptr() as usize,
+            ],
+            buffers
+        );
+        drop(shard);
+        store.remove(&lookup).await;
+        assert!(store.get(&lookup).await.is_none());
+    }
+
+    #[tokio::test]
     async fn processor_exits_promptly_on_cancellation() {
         let store = ReconnectCursorStore::new();
         let token = CancellationToken::new();
@@ -472,7 +509,7 @@ mod tests {
         let key = sample_key("p", "u");
         let ts = Utc.with_ymd_and_hms(2026, 4, 28, 8, 0, 5).unwrap();
 
-        store.record(&key, ts).await;
+        store.record(key.clone(), ts).await;
         store.get(&key).await;
         store.get(&key).await;
 
