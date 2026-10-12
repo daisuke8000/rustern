@@ -51,11 +51,34 @@ mod tests {
     }
 
     #[test]
-    fn mapper_delegates_implicit_query_to_core() {
-        let cli = Cli::try_parse_from(["rstn", "-n", "default", "-l", "app=foo"]).unwrap();
-        let out = resolved_run(&cli).unwrap();
-        assert_eq!(out.resolved_query(), ".*");
-        assert!(out.validation().implicit_query_from_selector);
+    fn selector_without_query_resolves_scope_without_kubeconfig() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_kubeconfig = dir.path().join("missing-kubeconfig");
+        for (scope, namespaces, all_namespaces) in [
+            (&["-A"][..], vec![], true),
+            (&["-n", "ns1"][..], vec!["ns1".to_string()], false),
+        ] {
+            for selector in [
+                &["-l", "app=foo"][..],
+                &["--field-selector", "metadata.name=foo"][..],
+            ] {
+                let mut args = vec![
+                    "rstn",
+                    "--kubeconfig",
+                    missing_kubeconfig.to_str().unwrap(),
+                    "--no-follow",
+                ];
+                args.extend_from_slice(scope);
+                args.extend_from_slice(selector);
+                let cli = Cli::try_parse_from(args).unwrap();
+                cli.validate().unwrap();
+                let out = resolved_run(&cli).unwrap();
+                assert_eq!(out.resolved_query(), ".*");
+                assert_eq!(out.resolved_namespaces(), namespaces);
+                assert_eq!(out.all_namespaces(), all_namespaces);
+                assert!(out.validation().implicit_query_from_selector);
+            }
+        }
     }
 
     #[test]
