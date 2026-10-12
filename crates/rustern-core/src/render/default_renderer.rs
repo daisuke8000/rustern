@@ -37,7 +37,11 @@ fn push_wall_prefix(
         }
         TimestampStyle::Rfc3339 => match zone {
             TimestampZone::Utc => {
-                buf.push_str(&dt_utc.to_rfc3339_opts(SecondsFormat::Nanos, false));
+                dt_utc
+                    .naive_utc()
+                    .format("%Y-%m-%dT%H:%M:%S%.9f+00:00")
+                    .write_to(buf)
+                    .expect("timestamp");
             }
             TimestampZone::Local => {
                 buf.push_str(

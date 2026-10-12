@@ -1,4 +1,5 @@
-use serde::Serialize;
+use chrono::{DateTime, Utc};
+use serde::{Serialize, Serializer};
 
 use crate::render::LineFormatter;
 use crate::source::LogEvent;
@@ -8,10 +9,31 @@ struct JsonLine<'a> {
     pod: &'a str,
     container: &'a str,
     namespace: &'a str,
-    timestamp: String,
+    #[serde(serialize_with = "serialize_timestamp")]
+    timestamp: &'a DateTime<Utc>,
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     level: Option<&'a str>,
+}
+
+fn serialize_timestamp<S: Serializer>(
+    timestamp: &DateTime<Utc>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    struct Timestamp<'a>(&'a DateTime<Utc>);
+
+    impl std::fmt::Display for Timestamp<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Chrono's serde representation uses Z; retain to_rfc3339's +00:00.
+            // write_to avoids DelayedFormat's Display scratch String.
+            self.0
+                .naive_utc()
+                .format("%Y-%m-%dT%H:%M:%S%.f+00:00")
+                .write_to(f)
+        }
+    }
+
+    serializer.collect_str(&Timestamp(timestamp))
 }
 
 pub struct JsonLineFormatter;
@@ -22,7 +44,7 @@ impl LineFormatter for JsonLineFormatter {
             pod: &event.source.pod,
             container: &event.source.container,
             namespace: &event.source.namespace,
-            timestamp: event.timestamp.to_rfc3339(),
+            timestamp: &event.timestamp,
             message: &event.message,
             level: event.level.as_ref().map(|l| l.as_str()),
         };
