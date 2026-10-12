@@ -35,6 +35,7 @@ tempfile = { workspace = true }
 bench = []
 
 [dev-dependencies]
+rustls = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tower-test = "0.4"
 http = "1"

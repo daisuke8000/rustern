@@ -6,7 +6,7 @@ members = ["crates/rustern-core"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -21,7 +21,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
 tracing = "0.1"
-kube = { version = "4.0.0", default-features = false, features = [
+kube = { version = "4.2.0", default-features = false, features = [
     "client",
     "config",
     "runtime",
@@ -40,7 +40,7 @@ chrono-tz = "0.10"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 fastrand = "2"
 secrecy = "0.10"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
 
 [package]
 name = "rustern"

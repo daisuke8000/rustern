@@ -206,6 +206,20 @@ users:
         f
     }
 
+    #[tokio::test]
+    async fn builds_https_client_without_kubeconfig_ca() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .unwrap();
+        let f = write_temp(SAMPLE);
+        let selector = ContextSelector {
+            kubeconfig_path: Some(f.path().to_path_buf()),
+            ..Default::default()
+        };
+        let (_, context) = build_client(&selector).await.unwrap();
+        assert_eq!(context.0, "default");
+    }
+
     #[test]
     fn resolves_explicit_path() {
         let f = write_temp(SAMPLE);
