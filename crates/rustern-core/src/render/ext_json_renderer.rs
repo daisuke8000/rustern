@@ -2,7 +2,10 @@
 //!
 //! Pod/container/namespace fields are plain text (no ANSI in JSON values; stern parity).
 
-use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
+
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::render::LineFormatter;
 use crate::source::LogEvent;
@@ -24,44 +27,43 @@ fn encode_message(message: &str, structured: Option<&crate::source::ParsedJson>)
     }
 }
 
-fn build_object(event: &LogEvent, all_namespaces: bool) -> Map<String, Value> {
-    let mut obj = Map::new();
+// Field order preserves the sorted keys of the previous serde_json::Map.
+#[derive(Serialize)]
+struct ExtJsonLine<'a> {
+    container: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<&'a BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<&'a str>,
+    message: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    namespace: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node: Option<&'a str>,
+    pod: &'a str,
+    timestamp: String,
+}
 
-    if all_namespaces {
-        obj.insert("namespace".into(), json!(event.source.namespace));
+fn build_object(event: &LogEvent, all_namespaces: bool) -> ExtJsonLine<'_> {
+    ExtJsonLine {
+        container: &event.source.container,
+        labels: (!event.source.labels.0.is_empty()).then_some(&event.source.labels.0),
+        level: event.level.as_ref().map(|level| level.as_str()),
+        message: encode_message(&event.message, event.structured.as_ref()),
+        namespace: all_namespaces.then_some(event.source.namespace.as_str()),
+        node: event.source.node.as_deref(),
+        pod: &event.source.pod,
+        timestamp: event.timestamp.to_rfc3339(),
     }
-    obj.insert("pod".into(), json!(event.source.pod));
-    obj.insert("container".into(), json!(event.source.container));
-    obj.insert(
-        "message".into(),
-        encode_message(&event.message, event.structured.as_ref()),
-    );
-    obj.insert(
-        "timestamp".into(),
-        Value::String(event.timestamp.to_rfc3339()),
-    );
-    if let Some(node) = &event.source.node {
-        obj.insert("node".into(), json!(node));
-    }
-    if !event.source.labels.0.is_empty() {
-        obj.insert(
-            "labels".into(),
-            serde_json::to_value(&event.source.labels.0).expect("labels map"),
-        );
-    }
-    if let Some(level) = &event.level {
-        obj.insert("level".into(), json!(level.as_str()));
-    }
-    obj
 }
 
 impl LineFormatter for ExtJsonLineFormatter {
     fn format_into(&self, event: &LogEvent, buf: &mut String) {
         let obj = build_object(event, self.all_namespaces);
         if self.pretty {
-            buf.push_str(&serde_json::to_string_pretty(&Value::Object(obj)).expect("json"));
+            buf.push_str(&serde_json::to_string_pretty(&obj).expect("json"));
         } else {
-            buf.push_str(&serde_json::to_string(&Value::Object(obj)).expect("json"));
+            buf.push_str(&serde_json::to_string(&obj).expect("json"));
         }
         buf.push('\n');
     }
@@ -72,7 +74,7 @@ mod tests {
     use super::*;
     use crate::source::{ContextName, Labels, LogLevel, SourceKind, SourceMeta};
     use chrono::{TimeZone, Utc};
-    use std::collections::BTreeMap;
+    use serde_json::{Map, json};
     use std::sync::Arc;
 
     fn sample_event(message: &str) -> LogEvent {
@@ -105,6 +107,112 @@ mod tests {
             all_namespaces,
             pretty,
         }
+    }
+
+    fn legacy_line(event: &LogEvent, all_namespaces: bool, pretty: bool) -> String {
+        let mut obj = Map::new();
+        if all_namespaces {
+            obj.insert("namespace".into(), json!(event.source.namespace));
+        }
+        obj.insert("pod".into(), json!(event.source.pod));
+        obj.insert("container".into(), json!(event.source.container));
+        obj.insert(
+            "message".into(),
+            encode_message(&event.message, event.structured.as_ref()),
+        );
+        obj.insert("timestamp".into(), json!(event.timestamp.to_rfc3339()));
+        if let Some(node) = &event.source.node {
+            obj.insert("node".into(), json!(node));
+        }
+        if !event.source.labels.0.is_empty() {
+            obj.insert(
+                "labels".into(),
+                serde_json::to_value(&event.source.labels.0).expect("labels map"),
+            );
+        }
+        if let Some(level) = &event.level {
+            obj.insert("level".into(), json!(level.as_str()));
+        }
+        let mut line = if pretty {
+            serde_json::to_string_pretty(&Value::Object(obj)).unwrap()
+        } else {
+            serde_json::to_string(&Value::Object(obj)).unwrap()
+        };
+        line.push('\n');
+        line
+    }
+
+    #[test]
+    fn extjson_output_bytes_match_legacy_with_optional_fields_and_messages() {
+        use crate::source::ParsedJson;
+
+        for message in [
+            "plain \"quoted\" \\ log\n\n",
+            "{invalid\n",
+            r#"{"z":[null,true,1.5],"a":{"z":2,"a":1}}"#,
+            "[1,true,null]",
+            "null",
+            "42",
+            "\"json string\"",
+            "",
+        ] {
+            for present in 0..8 {
+                let mut event = sample_event(message);
+                let source = Arc::make_mut(&mut event.source);
+                if present & 1 == 0 {
+                    source.node = None;
+                }
+                if present & 2 == 0 {
+                    source.labels = Arc::new(Labels::default());
+                } else {
+                    source.labels = Arc::new(Labels(BTreeMap::from([
+                        ("pod".into(), "label pod".into()),
+                        ("message".into(), "label message".into()),
+                        ("z\"\\".into(), "escaped\nvalue".into()),
+                    ])));
+                }
+                event.level =
+                    (present & 4 != 0).then(|| LogLevel::Other("custom \"level\"".into()));
+                for structured in [false, true] {
+                    event.structured = structured
+                        .then(|| ParsedJson::Serde(json!({"z": "cached", "a": [null, true]})));
+                    for all_namespaces in [false, true] {
+                        for pretty in [false, true] {
+                            let mut actual = String::from("existing prefix\n");
+                            formatter(all_namespaces, pretty).format_into(&event, &mut actual);
+                            assert_eq!(
+                                actual,
+                                format!(
+                                    "existing prefix\n{}",
+                                    legacy_line(&event, all_namespaces, pretty)
+                                ),
+                                "message={message:?}, present={present}, structured={structured}, namespace={all_namespaces}, pretty={pretty}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn extjson_key_order_and_label_collisions_are_nested() {
+        let mut event = sample_event("plain log");
+        Arc::make_mut(&mut event.source).labels = Arc::new(Labels(BTreeMap::from([
+            ("pod".into(), "label pod".into()),
+            ("container".into(), "label container".into()),
+            ("message".into(), "label message".into()),
+        ])));
+        assert_eq!(
+            formatter(true, false).format_line(&event),
+            concat!(
+                "{\"container\":\"app\",\"labels\":{\"container\":\"label container\",",
+                "\"message\":\"label message\",\"pod\":\"label pod\"},",
+                "\"level\":\"info\",\"message\":\"plain log\",",
+                "\"namespace\":\"production\",\"node\":\"node-1\",",
+                "\"pod\":\"web-abc\",\"timestamp\":\"2024-06-15T12:00:00+00:00\"}\n"
+            )
+        );
     }
 
     #[test]
