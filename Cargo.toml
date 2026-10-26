@@ -40,7 +40,7 @@ chrono-tz = "0.10"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 fastrand = "2"
 secrecy = "0.10"
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 
 [package]
 name = "rustern"
